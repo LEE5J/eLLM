@@ -26,6 +26,7 @@ pub struct Qwen35CpuModel {
     weights: HashMap<String, Vec<Bf16>>,
     layers: Vec<LayerState>,
     max_context: usize,
+    eos_token_ids: Vec<usize>,
 }
 
 pub fn supports_config(config: &Config) -> bool {
@@ -42,9 +43,24 @@ impl Qwen35CpuModel {
         weights: HashMap<String, Vec<Bf16>>,
         max_context: usize,
     ) -> Result<Self, String> {
+        let eos_token_id = config.eos_token_id;
+        Self::with_eos_token_ids(config, weights, max_context, vec![eos_token_id])
+    }
+
+    pub fn with_eos_token_ids(
+        config: Config,
+        weights: HashMap<String, Vec<Bf16>>,
+        max_context: usize,
+        mut eos_token_ids: Vec<usize>,
+    ) -> Result<Self, String> {
         if max_context == 0 {
             return Err("max_context must be > 0".to_string());
         }
+        if eos_token_ids.is_empty() {
+            eos_token_ids.push(config.eos_token_id);
+        }
+        eos_token_ids.sort_unstable();
+        eos_token_ids.dedup();
 
         let mut layers = Vec::with_capacity(config.num_hidden_layers);
         for layer_idx in 0..config.num_hidden_layers {
@@ -82,6 +98,7 @@ impl Qwen35CpuModel {
             weights,
             layers,
             max_context,
+            eos_token_ids,
         })
     }
 
@@ -104,13 +121,17 @@ impl Qwen35CpuModel {
                 break;
             }
             all_tokens.push(next_token);
-            if next_token == self.config.eos_token_id {
+            if self.is_eos(next_token) {
                 break;
             }
             next_token = self.forward_token_top1(next_token, all_tokens.len() - 1);
         }
 
         all_tokens[prompt_tokens.len()..].to_vec()
+    }
+
+    fn is_eos(&self, token: usize) -> bool {
+        self.eos_token_ids.binary_search(&token).is_ok()
     }
 
     pub fn forward_token_top1(&mut self, token: usize, position: usize) -> usize {
@@ -1007,5 +1028,19 @@ mod tests {
         assert_eq!(routes[1].0, 2);
         let sum = routes.iter().map(|(_, value)| value).sum::<f32>();
         assert!((sum - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_reference_cpu_accepts_multiple_eos_tokens() {
+        let model = Qwen35CpuModel::with_eos_token_ids(
+            tiny_config("linear_attention"),
+            common_weights(),
+            4,
+            vec![3, 2, 3],
+        )
+        .unwrap();
+        assert!(model.is_eos(2));
+        assert!(model.is_eos(3));
+        assert!(!model.is_eos(1));
     }
 }

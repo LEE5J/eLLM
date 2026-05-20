@@ -70,9 +70,13 @@ the eLLM Rust BF16 test path.
   generation. It covers GatedDeltaNet `linear_attention`, gated full attention,
   routed MoE experts, and shared experts, but it is not optimized yet. The
   current loader dequantizes AWQ expert weights to BF16 in host memory.
+- The Qwen3.6 AWQ CPU path accepts `ELLM_PROMPT` through the local
+  `tokenizer.json`, prints decoded generated text when possible, and loads EOS
+  ids from `generation_config.json`.
 - On the test system, a CPU-only Qwen3.6 AWQ smoke run with `ELLM_PROMPT_IDS=0`,
-  `ELLM_GENERATE_TOKENS=1`, and `ELLM_MAX_CONTEXT=2` completed in 55.43 seconds,
-  generated token id `222033`, and reached 83,559,080 KB peak RSS.
+  `ELLM_GENERATE_TOKENS=1`, and `ELLM_MAX_CONTEXT=2` completed in 55.54 seconds,
+  generated token id `222033`, decoded it as ` sanz`, and reached 83,363,796 KB
+  peak RSS.
 - The local model directory is intentionally ignored by Git because the full
   weight set is tens of GiB.
 - This is an experimental baseline; performance numbers depend heavily on memory
@@ -151,9 +155,13 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
   추가했습니다. GatedDeltaNet `linear_attention`, gated full attention, routed
   MoE expert, shared expert를 계산하지만 아직 최적화된 경로는 아닙니다. 현재
   loader는 AWQ expert weight를 host memory에서 BF16으로 dequantize합니다.
+- Qwen3.6 AWQ CPU 경로는 로컬 `tokenizer.json`을 통해 `ELLM_PROMPT`를 받고,
+  가능한 경우 디코딩된 생성 텍스트를 출력하며, EOS id는 `generation_config.json`
+  에서 읽습니다.
 - 테스트 시스템에서 `ELLM_PROMPT_IDS=0`, `ELLM_GENERATE_TOKENS=1`,
   `ELLM_MAX_CONTEXT=2`로 Qwen3.6 AWQ CPU-only smoke run을 수행했고,
-  55.43초에 token id `222033`을 생성했으며 peak RSS는 83,559,080 KB였습니다.
+  55.54초에 token id `222033`을 생성해 ` sanz`로 decode했으며 peak RSS는
+  83,363,796 KB였습니다.
 - 전체 모델 가중치는 수십 GiB 규모이므로 Git에서 제외했습니다.
 - 성능 수치는 메모리 속도, CPU 클럭, 프롬프트 길이, 컨텍스트 길이에 크게 영향을
   받습니다.

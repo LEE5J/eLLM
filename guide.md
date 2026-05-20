@@ -191,20 +191,27 @@ to the CPU reference executor:
 ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
 ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
 ELLM_GENERATE_TOKENS=1 \
-ELLM_PROMPT_IDS=0 \
-ELLM_MAX_CONTEXT=2 \
+ELLM_PROMPT='Write one short sentence about BF16.' \
+ELLM_MAX_CONTEXT=64 \
 RUSTFLAGS='-C target-cpu=native' \
 cargo run --release --bin main
 ```
 
-`ELLM_PROMPT_IDS` accepts comma-separated token ids. The binary currently prints
-generated token ids rather than decoded text. Expect high memory use and slow
-throughput in this path because it is a correctness-oriented CPU reference path,
-not the final optimized AWQ kernel path.
+`ELLM_PROMPT` is encoded with `tokenizer.json` from `ELLM_SAFETENSORS_DIR` and is
+wrapped in a minimal Qwen chat prompt by default. Set `ELLM_RAW_PROMPT=1` to
+encode the prompt exactly as provided. `ELLM_PROMPT_IDS` is still available for
+comma-separated token ids and takes precedence over `ELLM_PROMPT`.
+
+The binary prints generated token ids and, when a tokenizer is available, decoded
+generated text. Expect high memory use and slow throughput in this path because
+it is a correctness-oriented CPU reference path, not the final optimized AWQ
+kernel path. EOS ids are loaded from `generation_config.json` when available, so
+Qwen `<|im_end|>` can stop generation correctly.
 
 On the documented test system, the command above completed without GPU offload
-in 55.43 seconds, generated token id `222033`, and reached 83,559,080 KB peak
-RSS.
+with `ELLM_PROMPT_IDS=0`, `ELLM_GENERATE_TOKENS=1`, and `ELLM_MAX_CONTEXT=2` in
+55.54 seconds, generated token id `222033`, decoded it as ` sanz`, and reached
+83,363,796 KB peak RSS.
 
 To test the AWQ unpacking logic itself:
 
@@ -409,19 +416,27 @@ executor로 들어갑니다.
 ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
 ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
 ELLM_GENERATE_TOKENS=1 \
-ELLM_PROMPT_IDS=0 \
-ELLM_MAX_CONTEXT=2 \
+ELLM_PROMPT='BF16에 대해 한 문장으로 설명해줘.' \
+ELLM_MAX_CONTEXT=64 \
 RUSTFLAGS='-C target-cpu=native' \
 cargo run --release --bin main
 ```
 
-`ELLM_PROMPT_IDS`는 쉼표로 구분한 token id를 받습니다. 현재 바이너리는 디코딩된
-텍스트가 아니라 생성된 token id를 출력합니다. 이 경로는 최종 최적화 AWQ kernel
-경로가 아니라 정확성 확인을 위한 CPU reference 경로이므로 메모리 사용량이 크고
-처리 속도도 느릴 수 있습니다.
+`ELLM_PROMPT`는 `ELLM_SAFETENSORS_DIR`의 `tokenizer.json`으로 encode되며,
+기본적으로 간단한 Qwen chat prompt 형식으로 감쌉니다. 입력 문자열을 그대로
+encode하려면 `ELLM_RAW_PROMPT=1`을 설정합니다. 쉼표로 구분한 token id를 직접
+넣는 `ELLM_PROMPT_IDS`도 계속 사용할 수 있고, `ELLM_PROMPT`보다 우선합니다.
 
-문서화한 테스트 시스템에서는 위 명령이 GPU offload 없이 55.43초에 완료됐고,
-token id `222033`을 생성했으며 peak RSS는 83,559,080 KB였습니다.
+바이너리는 생성된 token id와, tokenizer가 있으면 디코딩된 생성 텍스트를 함께
+출력합니다. 이 경로는 최종 최적화 AWQ kernel 경로가 아니라 정확성 확인을 위한
+CPU reference 경로이므로 메모리 사용량이 크고 처리 속도도 느릴 수 있습니다.
+EOS id는 가능한 경우 `generation_config.json`에서 읽으므로 Qwen `<|im_end|>`도
+정상 종료 토큰으로 처리됩니다.
+
+문서화한 테스트 시스템에서는 `ELLM_PROMPT_IDS=0`, `ELLM_GENERATE_TOKENS=1`,
+`ELLM_MAX_CONTEXT=2`로 실행한 smoke run이 GPU offload 없이 55.54초에 완료됐고,
+token id `222033`을 생성해 ` sanz`로 decode했으며 peak RSS는 83,363,796
+KB였습니다.
 
 AWQ unpack 로직 자체는 아래 명령으로 테스트할 수 있습니다.
 

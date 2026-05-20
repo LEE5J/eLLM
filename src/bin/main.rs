@@ -5,7 +5,10 @@ use ellm::qwen3_moe::config::Config;
 use ellm::qwen3_moe::model::Model;
 use ellm::qwen3_moe::reference_cpu::{supports_config as supports_qwen35_cpu, Qwen35CpuModel};
 use ellm::serving::start::start;
+use serde_json::Value;
 use std::env;
+use std::path::{Path, PathBuf};
+use tokenizers::Tokenizer;
 
 fn main() {
     println!("Initializing...");
@@ -33,7 +36,10 @@ fn main() {
     if supports_qwen35_cpu(&config) {
         let weights_dir = env::var("ELLM_SAFETENSORS_DIR")
             .expect("ELLM_SAFETENSORS_DIR is required for the Qwen3.6/Qwen3.5 CPU reference path");
+        let tokenizer = load_tokenizer(&weights_dir);
+        let eos_token_ids = load_eos_token_ids(&weights_dir, config.eos_token_id);
         println!("Using Qwen3.6/Qwen3.5 CPU reference executor");
+        println!("eos_token_ids={:?}", eos_token_ids);
         println!("Loading safetensors from {}", weights_dir);
         let weights = SafeTensorsLoader::new(&weights_dir)
             .unwrap()
@@ -41,21 +47,7 @@ fn main() {
             .unwrap();
         println!("Loaded {} tensors from safetensors", weights.len());
 
-        let prompt_tokens = env::var("ELLM_PROMPT_IDS")
-            .ok()
-            .map(|value| {
-                value
-                    .split(',')
-                    .filter(|part| !part.trim().is_empty())
-                    .map(|part| {
-                        part.trim()
-                            .parse::<usize>()
-                            .expect("invalid ELLM_PROMPT_IDS token id")
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .filter(|tokens| !tokens.is_empty())
-            .unwrap_or_else(|| vec![0]);
+        let prompt_tokens = qwen35_prompt_tokens(tokenizer.as_ref());
         let max_context = env::var("ELLM_MAX_CONTEXT")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -65,11 +57,23 @@ fn main() {
             "prompt_ids={:?}, max_context={}, max_new_tokens={}",
             prompt_tokens, max_context, sequence_length
         );
-        let mut model = Qwen35CpuModel::new(config, weights, max_context).unwrap();
+        let mut model =
+            Qwen35CpuModel::with_eos_token_ids(config, weights, max_context, eos_token_ids)
+                .unwrap();
         let generated = model.generate_greedy(&prompt_tokens, sequence_length);
         println!("Generated token ids:");
         for (idx, token) in generated.iter().enumerate() {
             println!("{:02}: {}", idx + 1, token);
+        }
+        if let Some(tokenizer) = tokenizer.as_ref() {
+            let generated_ids = generated
+                .iter()
+                .map(|&token| u32::try_from(token).expect("token id exceeds u32"))
+                .collect::<Vec<_>>();
+            match tokenizer.decode(&generated_ids, true) {
+                Ok(text) => println!("Decoded generated text:\n{}", text),
+                Err(err) => eprintln!("tokenizer decode failed: {}", err),
+            }
         }
         return;
     }
@@ -127,4 +131,107 @@ fn main() {
         let token = unsafe { *sequences.add((position + 1) * batch_size) };
         println!("{:02}: {}", position + 1, token);
     }
+}
+
+fn parse_token_ids(value: &str, env_name: &str) -> Vec<usize> {
+    value
+        .split(',')
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| {
+            part.trim()
+                .parse::<usize>()
+                .unwrap_or_else(|_| panic!("invalid {} token id: {}", env_name, part.trim()))
+        })
+        .collect()
+}
+
+fn load_tokenizer(weights_dir: &str) -> Option<Tokenizer> {
+    let tokenizer_path = env::var("ELLM_TOKENIZER")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(weights_dir).join("tokenizer.json"));
+    if !tokenizer_path.exists() {
+        return None;
+    }
+
+    Some(Tokenizer::from_file(&tokenizer_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to load tokenizer from {}: {}",
+            tokenizer_path.display(),
+            err
+        )
+    }))
+}
+
+fn qwen35_prompt_tokens(tokenizer: Option<&Tokenizer>) -> Vec<usize> {
+    if let Ok(prompt_ids) = env::var("ELLM_PROMPT_IDS") {
+        let tokens = parse_token_ids(&prompt_ids, "ELLM_PROMPT_IDS");
+        if !tokens.is_empty() {
+            return tokens;
+        }
+    }
+
+    if let Ok(prompt) = env::var("ELLM_PROMPT") {
+        let tokenizer = tokenizer.expect("ELLM_PROMPT requires tokenizer.json or ELLM_TOKENIZER");
+        let prompt_text = if env::var("ELLM_RAW_PROMPT").ok().as_deref() == Some("1") {
+            prompt
+        } else {
+            qwen_chat_prompt(&prompt)
+        };
+        let encoding = tokenizer
+            .encode(prompt_text, true)
+            .unwrap_or_else(|err| panic!("tokenizer encode failed: {}", err));
+        let tokens = encoding
+            .get_ids()
+            .iter()
+            .map(|&token| token as usize)
+            .collect::<Vec<_>>();
+        assert!(!tokens.is_empty(), "tokenizer produced an empty prompt");
+        return tokens;
+    }
+
+    vec![0]
+}
+
+fn qwen_chat_prompt(prompt: &str) -> String {
+    format!(
+        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        prompt
+    )
+}
+
+fn load_eos_token_ids(weights_dir: &str, default_eos: usize) -> Vec<usize> {
+    if let Ok(raw) = env::var("ELLM_EOS_TOKEN_IDS") {
+        let mut ids = parse_token_ids(&raw, "ELLM_EOS_TOKEN_IDS");
+        if !ids.is_empty() {
+            ids.sort_unstable();
+            ids.dedup();
+            return ids;
+        }
+    }
+
+    let mut ids = vec![default_eos];
+    let path = Path::new(weights_dir).join("generation_config.json");
+    if let Ok(data) = std::fs::read_to_string(path) {
+        if let Ok(root) = serde_json::from_str::<Value>(&data) {
+            match root.get("eos_token_id") {
+                Some(Value::Number(value)) => {
+                    if let Some(value) = value.as_u64() {
+                        ids.push(value as usize);
+                    }
+                }
+                Some(Value::Array(values)) => {
+                    for value in values {
+                        if let Some(value) = value.as_u64() {
+                            ids.push(value as usize);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
