@@ -19,7 +19,7 @@ than building the experiment around an AVX-512 FP16 path.
 | AWQ test target | Experimental CPU reference path for cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit |
 | Primary runtime target | eLLM Rust CPU executor, AVX-512 BF16 |
 | GPU usage | Not used |
-| OpenAI-compatible API | CPU-only local compatibility wrapper for the BF16 baseline |
+| OpenAI-compatible API | eLLM Rust CPU server mode for the Qwen3.6 AWQ reference path |
 | Purpose | eLLM CPU operation validation and baseline performance measurement |
 
 This repository is not intended as a production inference server yet. It is a
@@ -58,14 +58,15 @@ small-batch baseline, not as a full context-length benchmark.
 ## Running
 
 See [guide.md](guide.md) for setup and execution instructions, including model
-placement, safetensors verification, the CPU-only OpenAI-compatible wrapper, and
+placement, safetensors verification, the CPU-only OpenAI-compatible server, and
 the eLLM Rust BF16 test path.
 
 ## Notes
 
 - The reported output quality was confirmed to be normal for short test prompts.
-- The benchmark target is the eLLM Rust CPU path. The Python scripts are
-  CPU-only helper tools for verification and OpenAI API compatibility checks.
+- The benchmark target is the eLLM Rust CPU path. Python scripts are CPU-only
+  helper tools for safetensors verification; the Qwen3.6 OpenAI-compatible API
+  mode now runs through the Rust eLLM CPU reference executor.
 - The Qwen3.6 AWQ target has an experimental CPU reference executor for token-id
   generation. It covers GatedDeltaNet `linear_attention`, gated full attention,
   routed MoE experts, and shared experts, but it is not optimized yet. The
@@ -73,6 +74,9 @@ the eLLM Rust BF16 test path.
 - The Qwen3.6 AWQ CPU path accepts `ELLM_PROMPT` through the local
   `tokenizer.json`, prints decoded generated text when possible, and loads EOS
   ids from `generation_config.json`.
+- The Qwen3.6 AWQ server mode is enabled with `ELLM_OPENAI_SERVER=1`, uses model
+  id `local_model` and API key `EMPTY` by default, and supports both regular and
+  streaming `/v1/chat/completions` responses.
 - On the test system, a CPU-only Qwen3.6 AWQ smoke run with `ELLM_PROMPT_IDS=0`,
   `ELLM_GENERATE_TOKENS=1`, and `ELLM_MAX_CONTEXT=2` completed in 55.54 seconds,
   generated token id `222033`, decoded it as ` sanz`, and reached 83,363,796 KB
@@ -105,7 +109,7 @@ AMD Ryzen 시스템에서 eLLM CPU 런타임으로 실행해 보기 위한 실�
 | AWQ 테스트 대상 | cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit 실험적 CPU reference 경로 |
 | 주 실행 대상 | eLLM Rust CPU executor, AVX-512 BF16 |
 | GPU 사용 | 사용하지 않음 |
-| OpenAI 호환 API | BF16 기준선 확인용 CPU 전용 로컬 호환 wrapper |
+| OpenAI 호환 API | Qwen3.6 AWQ reference 경로용 eLLM Rust CPU 서버 모드 |
 | 목적 | eLLM CPU 동작 검증 및 기본 성능 측정 |
 
 이 저장소는 아직 프로덕션용 추론 서버를 목표로 한 것은 아닙니다. 테스트한
@@ -143,14 +147,15 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
 
 ## 실행 방법
 
-모델 배치, safetensors 검증, CPU 전용 OpenAI 호환 wrapper 실행, eLLM Rust BF16
+모델 배치, safetensors 검증, CPU 전용 OpenAI 호환 서버 실행, eLLM Rust BF16
 테스트 실행 방법은 [guide.md](guide.md)에 정리되어 있습니다.
 
 ## 참고
 
 - 짧은 테스트 프롬프트 기준으로 답변 품질은 정상적으로 나오는 것을 확인했습니다.
 - 성능 측정 기준은 eLLM Rust CPU 경로입니다. Python 스크립트는 safetensors
-  검증과 OpenAI API 호환성 확인을 위한 CPU 전용 보조 도구입니다.
+  검증을 위한 CPU 전용 보조 도구이고, Qwen3.6 OpenAI 호환 API 모드는 Rust
+  eLLM CPU reference executor로 실행됩니다.
 - Qwen3.6 AWQ 대상은 token id 생성을 위한 실험적 CPU reference executor를
   추가했습니다. GatedDeltaNet `linear_attention`, gated full attention, routed
   MoE expert, shared expert를 계산하지만 아직 최적화된 경로는 아닙니다. 현재
@@ -158,6 +163,9 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
 - Qwen3.6 AWQ CPU 경로는 로컬 `tokenizer.json`을 통해 `ELLM_PROMPT`를 받고,
   가능한 경우 디코딩된 생성 텍스트를 출력하며, EOS id는 `generation_config.json`
   에서 읽습니다.
+- Qwen3.6 AWQ 서버 모드는 `ELLM_OPENAI_SERVER=1`로 켜며, 기본 model id는
+  `local_model`, API key는 `EMPTY`입니다. 일반 응답과 streaming
+  `/v1/chat/completions` 응답을 모두 지원합니다.
 - 테스트 시스템에서 `ELLM_PROMPT_IDS=0`, `ELLM_GENERATE_TOKENS=1`,
   `ELLM_MAX_CONTEXT=2`로 Qwen3.6 AWQ CPU-only smoke run을 수행했고,
   55.54초에 token id `222033`을 생성해 ` sanz`로 decode했으며 peak RSS는

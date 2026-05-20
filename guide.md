@@ -1,9 +1,9 @@
 # Running Guide
 
 This guide explains how to prepare the local model files, verify the
-`safetensors` checkpoint, run the CPU-only OpenAI-compatible wrapper, and run the
-eLLM Rust BF16 CPU test path. The target runtime in this repository is CPU-only
-eLLM execution; GPU offload is not used.
+`safetensors` checkpoint, run the CPU-only OpenAI-compatible eLLM server, and
+run the eLLM Rust BF16 CPU test path. The target runtime in this repository is
+CPU-only eLLM execution; GPU offload is not used.
 
 ## 1. Requirements
 
@@ -94,23 +94,31 @@ Expected output includes:
 generated_tokens: ...
 ```
 
-## 4. Start the CPU-Only OpenAI-Compatible Wrapper
+## 4. Start the CPU-Only OpenAI-Compatible eLLM Server
 
 Start the local chat server with model name `local_model`, API key `EMPTY`, host
-`0.0.0.0`, and port `8000`. The wrapper explicitly hides CUDA devices and loads
-the model on CPU. The benchmark target remains the eLLM Rust CPU path in the next
-section.
+`0.0.0.0`, and port `8000`. This server mode loads the Qwen3.6 AWQ model through
+the Rust eLLM CPU reference executor. GPU offload is not used.
 
 ```bash
-.venv/bin/python scripts/openai_compatible_server.py \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --model-dir models/Qwen3-Coder-30B-A3B-Instruct-full \
-  --model-id local_model \
-  --threads 12 \
-  --default-max-tokens 512 \
-  --max-context-length 32768
+RUSTFLAGS='-C target-cpu=native' cargo build --release --bin main
+
+CUDA_VISIBLE_DEVICES= \
+ELLM_OPENAI_SERVER=1 \
+ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
+ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
+ELLM_MODEL_ID=local_model \
+ELLM_API_KEY=EMPTY \
+ELLM_HOST=0.0.0.0 \
+ELLM_PORT=8000 \
+ELLM_MAX_CONTEXT=2048 \
+ELLM_DEFAULT_MAX_TOKENS=128 \
+./target/release/main
 ```
+
+`ELLM_MAX_CONTEXT` controls the server-side prompt + completion window allocated
+inside the eLLM reference executor. Larger values use more host memory. This path
+is correctness-oriented and slow; it is not the final optimized AWQ kernel path.
 
 Health check:
 
@@ -153,8 +161,30 @@ curl -N http://localhost:8000/v1/chat/completions \
     ],
     "max_tokens": 128,
     "stream": true
+}'
+```
+
+For a minimal CPU smoke test that avoids a long chat-template prefill, the server
+also accepts a local eLLM extension field, `prompt_token_ids`. This is not part
+of the OpenAI API; it is only useful for checking the loaded eLLM model path:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer EMPTY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local_model",
+    "messages": [{"role": "user", "content": "smoke"}],
+    "prompt_token_ids": [0],
+    "max_tokens": 1
   }'
 ```
+
+On the documented test system, this server smoke loaded 733 tensors, reported
+`runtime=ellm-qwen35-cpu-reference` from `/health`, returned model id
+`local_model` from `/v1/models`, and handled a normal `messages` request with
+`prompt_tokens=9`. The short `prompt_token_ids=[0]` smoke generated content
+` sanz`, and streaming mode ended with `data: [DONE]`.
 
 ## 5. Run the eLLM Rust BF16 CPU Path
 
@@ -229,9 +259,9 @@ RUSTFLAGS='-C target-cpu=native' cargo test --lib qwen3_moe::reference_cpu
 
 # 실행 가이드
 
-이 문서는 로컬 모델 파일 준비, `safetensors` 검증, CPU 전용 OpenAI 호환 wrapper
-실행, Rust BF16 테스트 실행 방법을 정리합니다. 이 저장소의 기준 실행 대상은
-eLLM CPU 실행이며, GPU offload는 사용하지 않습니다.
+이 문서는 로컬 모델 파일 준비, `safetensors` 검증, CPU 전용 OpenAI 호환 eLLM
+서버 실행, Rust BF16 테스트 실행 방법을 정리합니다. 이 저장소의 기준 실행
+대상은 eLLM CPU 실행이며, GPU offload는 사용하지 않습니다.
 
 ## 1. 요구 사항
 
@@ -321,22 +351,32 @@ dequantize합니다.
 generated_tokens: ...
 ```
 
-## 4. CPU 전용 OpenAI 호환 wrapper 실행
+## 4. CPU 전용 OpenAI 호환 eLLM 서버 실행
 
 모델 이름은 `local_model`, API key는 `EMPTY`, host는 `0.0.0.0`, port는 `8000`으로
-실행합니다. 이 wrapper는 CUDA 장치를 숨기고 모델을 CPU에 로드합니다. 성능 측정
-기준은 다음 섹션의 eLLM Rust CPU 경로입니다.
+실행합니다. 이 서버 모드는 Rust eLLM CPU reference executor로 Qwen3.6 AWQ
+모델을 로드합니다. GPU offload는 사용하지 않습니다.
 
 ```bash
-.venv/bin/python scripts/openai_compatible_server.py \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --model-dir models/Qwen3-Coder-30B-A3B-Instruct-full \
-  --model-id local_model \
-  --threads 12 \
-  --default-max-tokens 512 \
-  --max-context-length 32768
+RUSTFLAGS='-C target-cpu=native' cargo build --release --bin main
+
+CUDA_VISIBLE_DEVICES= \
+ELLM_OPENAI_SERVER=1 \
+ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
+ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
+ELLM_MODEL_ID=local_model \
+ELLM_API_KEY=EMPTY \
+ELLM_HOST=0.0.0.0 \
+ELLM_PORT=8000 \
+ELLM_MAX_CONTEXT=2048 \
+ELLM_DEFAULT_MAX_TOKENS=128 \
+./target/release/main
 ```
+
+`ELLM_MAX_CONTEXT`는 eLLM reference executor 내부에 할당할 prompt + completion
+context window를 정합니다. 값을 키우면 host memory 사용량도 늘어납니다. 이
+경로는 정확성 확인을 위한 reference 경로라 느리며, 최종 최적화 AWQ kernel
+경로는 아닙니다.
 
 Health check:
 
@@ -379,8 +419,31 @@ curl -N http://localhost:8000/v1/chat/completions \
     ],
     "max_tokens": 128,
     "stream": true
+}'
+```
+
+긴 chat template prefill을 피해서 CPU 경로만 짧게 확인하려면 로컬 eLLM 확장
+필드인 `prompt_token_ids`도 사용할 수 있습니다. 이 필드는 OpenAI API 표준이
+아니며, 로드된 eLLM 모델 경로를 확인하기 위한 용도입니다.
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer EMPTY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local_model",
+    "messages": [{"role": "user", "content": "smoke"}],
+    "prompt_token_ids": [0],
+    "max_tokens": 1
   }'
 ```
+
+문서화한 테스트 시스템에서는 이 서버 smoke run에서 733개 tensor를 로드했고,
+`/health`는 `runtime=ellm-qwen35-cpu-reference`를 반환했으며, `/v1/models`는
+model id `local_model`을 반환했습니다. 일반 `messages` 요청은
+`prompt_tokens=9`로 처리됐습니다. 짧은 `prompt_token_ids=[0]` smoke의 생성
+content는 ` sanz`였고, streaming 모드는 마지막에 `data: [DONE]`으로
+종료됐습니다.
 
 ## 5. eLLM Rust BF16 CPU 경로 실행
 

@@ -3,6 +3,7 @@ use ellm::memory::allocator::allocate_init;
 use ellm::memory::model_loader::SafeTensorsLoader;
 use ellm::qwen3_moe::config::Config;
 use ellm::qwen3_moe::model::Model;
+use ellm::qwen3_moe::openai_server::{start_reference_openai_server, OpenAiServerOptions};
 use ellm::qwen3_moe::reference_cpu::{supports_config as supports_qwen35_cpu, Qwen35CpuModel};
 use ellm::serving::start::start;
 use serde_json::Value;
@@ -24,6 +25,7 @@ fn main() {
     let sequence_chunk_size = 1;
     let batch_size = 3;
     let topk_size = 8;
+    let server_mode = env_flag("ELLM_OPENAI_SERVER") || env::args().any(|arg| arg == "--serve");
 
     let config_path = env::var("ELLM_CONFIG")
         .unwrap_or_else(|_| String::from("models/Qwen3-Coder-30B-A3B-Instruct/config1.json"));
@@ -46,6 +48,42 @@ fn main() {
             .load_all_weights_bf16_packed_moe(config.num_experts)
             .unwrap();
         println!("Loaded {} tensors from safetensors", weights.len());
+
+        if server_mode {
+            let tokenizer =
+                tokenizer.expect("Qwen3.6/Qwen3.5 OpenAI server mode requires tokenizer.json");
+            let max_context = env::var("ELLM_MAX_CONTEXT")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(2048);
+            let options = OpenAiServerOptions {
+                host: env::var("ELLM_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+                port: env::var("ELLM_PORT")
+                    .ok()
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .unwrap_or(8000),
+                model_id: env::var("ELLM_MODEL_ID").unwrap_or_else(|_| "local_model".to_string()),
+                api_key: env::var("ELLM_API_KEY").unwrap_or_else(|_| "EMPTY".to_string()),
+                default_max_tokens: env::var("ELLM_DEFAULT_MAX_TOKENS")
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(sequence_length),
+            };
+            println!(
+                "Starting OpenAI-compatible eLLM CPU server with max_context={}",
+                max_context
+            );
+            start_reference_openai_server(
+                config,
+                weights,
+                tokenizer,
+                eos_token_ids,
+                max_context,
+                options,
+            )
+            .unwrap();
+            return;
+        }
 
         let prompt_tokens = qwen35_prompt_tokens(tokenizer.as_ref());
         let max_context = env::var("ELLM_MAX_CONTEXT")
@@ -76,6 +114,13 @@ fn main() {
             }
         }
         return;
+    }
+
+    if server_mode {
+        eprintln!(
+            "ELLM_OPENAI_SERVER/--serve currently supports the Qwen3.6/Qwen3.5 CPU reference path only"
+        );
+        std::process::exit(2);
     }
 
     let unsupported_layer_types = config.unsupported_layer_types();
@@ -131,6 +176,17 @@ fn main() {
         let token = unsafe { *sequences.add((position + 1) * batch_size) };
         println!("{:02}: {}", position + 1, token);
     }
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| {
+            matches!(
+                value.as_str(),
+                "1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn parse_token_ids(value: &str, env_name: &str) -> Vec<usize> {

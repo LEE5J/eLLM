@@ -108,6 +108,7 @@ impl Qwen35CpuModel {
         max_new_tokens: usize,
     ) -> Vec<usize> {
         assert!(!prompt_tokens.is_empty(), "prompt_tokens must not be empty");
+        self.reset_state();
         let mut all_tokens = Vec::with_capacity(prompt_tokens.len() + max_new_tokens);
         let mut next_token = 0usize;
 
@@ -132,6 +133,23 @@ impl Qwen35CpuModel {
 
     fn is_eos(&self, token: usize) -> bool {
         self.eos_token_ids.binary_search(&token).is_ok()
+    }
+
+    pub fn is_eos_token(&self, token: usize) -> bool {
+        self.is_eos(token)
+    }
+
+    pub fn reset_state(&mut self) {
+        for layer in self.layers.iter_mut() {
+            if let Some(linear) = layer.linear.as_mut() {
+                linear.conv_state.fill(0.0);
+                linear.recurrent_state.fill(0.0);
+            }
+            if let Some(full) = layer.full.as_mut() {
+                full.keys.fill(0.0);
+                full.values.fill(0.0);
+            }
+        }
     }
 
     pub fn forward_token_top1(&mut self, token: usize, position: usize) -> usize {
