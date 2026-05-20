@@ -1,7 +1,11 @@
 use crate::bfloat16::Bf16;
 use crate::qwen3_moe::config::Config;
+use rayon::prelude::*;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+
+const PARALLEL_ROW_THRESHOLD: usize = 32;
+const PARALLEL_WORK_THRESHOLD: usize = 32 * 1024;
 
 #[derive(Debug)]
 struct LinearAttentionState {
@@ -307,34 +311,68 @@ fn matvec_bf16(input: &[f32], weight: &[Bf16], rows: usize, cols: usize) -> Vec<
     assert_eq!(input.len(), cols);
     assert_eq!(weight.len(), rows * cols);
     let mut output = vec![0.0; rows];
-    for row in 0..rows {
-        let weight_row = &weight[row * cols..(row + 1) * cols];
-        let mut acc = 0.0f32;
-        for col in 0..cols {
-            acc += input[col] * weight_row[col].to_f32();
+
+    if should_parallel_matvec(rows, cols) {
+        output.par_iter_mut().enumerate().for_each(|(row, value)| {
+            let weight_row = &weight[row * cols..(row + 1) * cols];
+            *value = dot_bf16(input, weight_row);
+        });
+    } else {
+        for row in 0..rows {
+            let weight_row = &weight[row * cols..(row + 1) * cols];
+            output[row] = dot_bf16(input, weight_row);
         }
-        output[row] = acc;
     }
+
     output
 }
 
 fn top1_matvec_bf16(input: &[f32], weight: &[Bf16], rows: usize, cols: usize) -> (usize, f32) {
     assert_eq!(input.len(), cols);
     assert_eq!(weight.len(), rows * cols);
+    if should_parallel_matvec(rows, cols) {
+        return (0..rows)
+            .into_par_iter()
+            .map(|row| {
+                let weight_row = &weight[row * cols..(row + 1) * cols];
+                (row, dot_bf16(input, weight_row))
+            })
+            .reduce(|| (0, f32::NEG_INFINITY), best_top1_pair);
+    }
+
     let mut best_idx = 0usize;
     let mut best_value = f32::NEG_INFINITY;
     for row in 0..rows {
         let weight_row = &weight[row * cols..(row + 1) * cols];
-        let mut acc = 0.0f32;
-        for col in 0..cols {
-            acc += input[col] * weight_row[col].to_f32();
-        }
+        let acc = dot_bf16(input, weight_row);
         if acc > best_value {
             best_value = acc;
             best_idx = row;
         }
     }
     (best_idx, best_value)
+}
+
+fn should_parallel_matvec(rows: usize, cols: usize) -> bool {
+    rows >= PARALLEL_ROW_THRESHOLD && rows.saturating_mul(cols) >= PARALLEL_WORK_THRESHOLD
+}
+
+#[inline(always)]
+fn dot_bf16(input: &[f32], weight_row: &[Bf16]) -> f32 {
+    debug_assert_eq!(input.len(), weight_row.len());
+    let mut acc = 0.0f32;
+    for col in 0..input.len() {
+        acc += input[col] * weight_row[col].to_f32();
+    }
+    acc
+}
+
+fn best_top1_pair(lhs: (usize, f32), rhs: (usize, f32)) -> (usize, f32) {
+    if rhs.1 > lhs.1 || (rhs.1 == lhs.1 && rhs.0 < lhs.0) {
+        rhs
+    } else {
+        lhs
+    }
 }
 
 fn linear_key_dim(config: &Config) -> usize {
