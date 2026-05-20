@@ -151,20 +151,6 @@ cargo run --release --bin main
 The binary currently prints generated token ids rather than a decoded text
 response.
 
-## 6. Measure Host Memory Bandwidth
-
-For the host memory reference number used in the README:
-
-```bash
-perf bench mem memcpy -f default -s 2GB -l 5
-```
-
-The tested host reported:
-
-```text
-27.014688 GB/sec
-```
-
 ---
 
 # 실행 가이드
@@ -316,17 +302,3 @@ cargo run --release --bin main
 ```
 
 현재 Rust 바이너리는 디코딩된 텍스트가 아니라 생성된 token id를 출력합니다.
-
-## 6. Host Memory 대역폭 측정
-
-README에 적은 host memory 참고값은 아래 명령으로 측정했습니다.
-
-```bash
-perf bench mem memcpy -f default -s 2GB -l 5
-```
-
-테스트 호스트에서는 다음 값이 나왔습니다.
-
-```text
-27.014688 GB/sec
-```

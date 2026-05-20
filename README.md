@@ -3,10 +3,11 @@
 This fork is an experimental validation of running a Qwen3-Coder MoE model from
 Hugging Face `safetensors` on a consumer AMD Ryzen platform.
 
-The original project was mainly oriented around server CPU paths such as AMX.
-This version explores a Ryzen 9000-series path using AVX-512 BF16, because
-consumer CPUs in this class do not provide the same FP16 execution path that
-server platforms expose.
+The original repository mainly targets server-class CPU lineups and is designed
+around an AVX-512 FP16 execution path. Ryzen 9000-series CPUs expose AVX-512
+BF16 instead, while many current LLM checkpoints are already distributed in
+BF16. Because of that, this fork focuses on using BF16 weights directly rather
+than building the experiment around an AVX-512 FP16 path.
 
 ## Scope
 
@@ -46,7 +47,6 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
 | --- | ---: | --- |
 | Prefill (PP) | ~60 tokens/s | Short prompt, batch size 1 |
 | Token generation (TG/TP) | ~5.4 tokens/s | CPU path, BF16 weights |
-| Host `memcpy` bandwidth | 27.014688 GB/s | 2 GB buffer, `perf bench mem memcpy` |
 
 Longer prompts and longer context windows are expected to reduce throughput,
 especially during token generation. The current result should be read as a
@@ -74,10 +74,11 @@ BF16 test path.
 이 포크는 Hugging Face `safetensors` 형식의 Qwen3-Coder MoE 모델을 소비자용
 AMD Ryzen 시스템에서 실행해 보기 위한 실험용 저장소입니다.
 
-원본 프로젝트는 주로 AMX 같은 서버 CPU 경로를 기준으로 작성되어 있었습니다.
-이 버전은 Ryzen 9000 시리즈에서 사용할 수 있는 AVX-512 BF16 경로를 실험합니다.
-소비자용 CPU에서는 서버 플랫폼과 같은 FP16 실행 경로를 기대하기 어렵기 때문에,
-BF16 기반 포팅 가능성을 확인하는 데 초점을 두었습니다.
+원본 리포지토리는 서버급 CPU 라인업을 주 대상으로 하며, AVX-512 FP16 실행
+경로를 기반으로 설계되어 있습니다. 반면 Ryzen 9000 시리즈는 AVX-512 BF16을
+지원하고, 최근 LLM 체크포인트도 BF16 형식으로 배포되는 경우가 많습니다. 따라서
+이 포크는 AVX-512 FP16 경로를 전제로 하기보다 BF16 가중치를 직접 사용하는
+방향에 초점을 둡니다.
 
 ## 범위
 
@@ -117,7 +118,6 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
 | --- | ---: | --- |
 | Prefill (PP) | 약 60 tokens/s | 짧은 프롬프트, 배치 크기 1 |
 | Token generation (TG/TP) | 약 5.4 tokens/s | CPU 경로, BF16 가중치 |
-| Host `memcpy` 대역폭 | 27.014688 GB/s | 2 GB 버퍼, `perf bench mem memcpy` |
 
 프롬프트가 길어지거나 컨텍스트 길이가 늘어나면 특히 token generation 단계의
 성능은 더 낮아질 수 있습니다. 위 수치는 전체 컨텍스트 길이 벤치마크가 아니라,
