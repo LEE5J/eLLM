@@ -52,33 +52,11 @@ Longer prompts and longer context windows are expected to reduce throughput,
 especially during token generation. The current result should be read as a
 small-batch baseline, not as a full context-length benchmark.
 
-## OpenAI-Compatible Server
+## Running
 
-The repository includes a minimal local OpenAI-compatible chat server:
-
-```bash
-.venv/bin/python scripts/openai_compatible_server.py \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --model-dir models/Qwen3-Coder-30B-A3B-Instruct-full \
-  --model-id local_model \
-  --threads 12 \
-  --default-max-tokens 512 \
-  --max-context-length 32768
-```
-
-Use `EMPTY` as the API key for local clients:
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer EMPTY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "local_model",
-    "messages": [{"role": "user", "content": "Write a short Python example."}],
-    "max_tokens": 128
-  }'
-```
+See [guide.md](guide.md) for setup and execution instructions, including model
+placement, safetensors verification, the OpenAI-compatible server, and the Rust
+BF16 test path.
 
 ## Notes
 
@@ -145,33 +123,10 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
 성능은 더 낮아질 수 있습니다. 위 수치는 전체 컨텍스트 길이 벤치마크가 아니라,
 짧은 입력과 작은 배치에서 확인한 기준값으로 보는 것이 좋습니다.
 
-## OpenAI 호환 서버
+## 실행 방법
 
-이 저장소에는 로컬 OpenAI 호환 chat 서버가 포함되어 있습니다.
-
-```bash
-.venv/bin/python scripts/openai_compatible_server.py \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --model-dir models/Qwen3-Coder-30B-A3B-Instruct-full \
-  --model-id local_model \
-  --threads 12 \
-  --default-max-tokens 512 \
-  --max-context-length 32768
-```
-
-로컬 클라이언트에서는 API key로 `EMPTY`를 사용하면 됩니다.
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer EMPTY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "local_model",
-    "messages": [{"role": "user", "content": "짧은 Python 예제를 작성해줘."}],
-    "max_tokens": 128
-  }'
-```
+모델 배치, safetensors 검증, OpenAI 호환 서버 실행, Rust BF16 테스트 실행 방법은
+[guide.md](guide.md)에 정리되어 있습니다.
 
 ## 참고
 
