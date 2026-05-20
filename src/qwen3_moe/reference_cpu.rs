@@ -627,14 +627,15 @@ fn full_attention_step(
         q_dim * 2,
         config.hidden_size,
     );
+    let (query_projection, gate) =
+        split_full_attention_q_gate(&q_and_gate, config.num_attention_heads, config.head_dim);
     let mut query = rms_norm_heads_offset(
-        &q_and_gate[..q_dim],
+        &query_projection,
         weight(weights, &format!("{}.q_norm.weight", prefix)),
         config.num_attention_heads,
         config.head_dim,
         config.rms_norm_eps,
     );
-    let gate = &q_and_gate[q_dim..q_dim * 2];
 
     let mut key = rms_norm_heads_offset(
         &matvec_bf16(
@@ -716,6 +717,28 @@ fn full_attention_step(
         config.hidden_size,
         q_dim,
     )
+}
+
+fn split_full_attention_q_gate(
+    q_and_gate: &[f32],
+    num_attention_heads: usize,
+    head_dim: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let q_dim = num_attention_heads * head_dim;
+    assert_eq!(q_and_gate.len(), q_dim * 2);
+
+    let mut query = vec![0.0; q_dim];
+    let mut gate = vec![0.0; q_dim];
+    for head in 0..num_attention_heads {
+        let packed_base = head * head_dim * 2;
+        let output_base = head * head_dim;
+        query[output_base..output_base + head_dim]
+            .copy_from_slice(&q_and_gate[packed_base..packed_base + head_dim]);
+        gate[output_base..output_base + head_dim]
+            .copy_from_slice(&q_and_gate[packed_base + head_dim..packed_base + head_dim * 2]);
+    }
+
+    (query, gate)
 }
 
 fn apply_rope(
@@ -1084,6 +1107,14 @@ mod tests {
         assert_eq!(routes[1].0, 2);
         let sum = routes.iter().map(|(_, value)| value).sum::<f32>();
         assert!((sum - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_full_attention_q_gate_split_is_head_local() {
+        let (query, gate) =
+            split_full_attention_q_gate(&[10.0, 11.0, 20.0, 21.0, 30.0, 31.0, 40.0, 41.0], 2, 2);
+        assert_eq!(query, vec![10.0, 11.0, 30.0, 31.0]);
+        assert_eq!(gate, vec![20.0, 21.0, 40.0, 41.0]);
     }
 
     #[test]

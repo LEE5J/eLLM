@@ -250,7 +250,7 @@ fn qwen35_prompt_tokens(tokenizer: Option<&Tokenizer>) -> Vec<usize> {
 
 fn qwen_chat_prompt(prompt: &str) -> String {
     format!(
-        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
         prompt
     )
 }

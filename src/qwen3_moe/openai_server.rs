@@ -368,7 +368,7 @@ fn render_chat_prompt(messages: &[ChatMessage]) -> String {
         prompt.push_str(&content_as_text(&message.content));
         prompt.push_str("<|im_end|>\n");
     }
-    prompt.push_str("<|im_start|>assistant\n");
+    prompt.push_str("<|im_start|>assistant\n<think>\n\n</think>\n\n");
     prompt
 }
 
