@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 import torch
 from safetensors import safe_open
 from transformers import AutoModelForCausalLM, AutoTokenizer

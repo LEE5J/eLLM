@@ -15,6 +15,8 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Any
 
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 

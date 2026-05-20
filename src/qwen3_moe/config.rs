@@ -13,6 +13,10 @@ pub struct Config {
     #[serde(default)]
     pub attention_dropout: f32,
     #[serde(default)]
+    pub attention_bias: bool,
+    #[serde(default)]
+    pub attn_output_gate: bool,
+    #[serde(default)]
     pub decoder_sparse_step: usize,
     #[serde(default)]
     pub eos_token_id: usize,
@@ -82,6 +86,18 @@ pub struct Config {
     pub vocab_size: usize,
     #[serde(default)]
     pub layer_types: Vec<String>,
+    #[serde(default)]
+    pub linear_conv_kernel_dim: usize,
+    #[serde(default)]
+    pub linear_key_head_dim: usize,
+    #[serde(default)]
+    pub linear_num_key_heads: usize,
+    #[serde(default)]
+    pub linear_num_value_heads: usize,
+    #[serde(default)]
+    pub linear_value_head_dim: usize,
+    #[serde(default)]
+    pub partial_rotary_factor: f32,
 }
 
 impl Config {
@@ -127,6 +143,16 @@ impl Config {
                 config.rope_theta = rope_theta as usize;
             }
         }
+        if config.partial_rotary_factor == 0.0 {
+            if let Some(partial_rotary_factor) = root
+                .get("text_config")
+                .and_then(|v| v.get("rope_parameters"))
+                .and_then(|v| v.get("partial_rotary_factor"))
+                .and_then(Value::as_f64)
+            {
+                config.partial_rotary_factor = partial_rotary_factor as f32;
+            }
+        }
         Ok(config)
     }
 
@@ -143,6 +169,8 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
     #[test]
     fn test_from_file() {
         let config = Config::load_from_file(r"models/Qwen3-Coder-30B-A3B-Instruct/config.json");
@@ -150,5 +178,55 @@ mod tests {
             Ok(cfg) => println!("{:?}", cfg),
             Err(e) => println!("Error loading config: {}", e),
         }
+    }
+
+    #[test]
+    fn test_nested_qwen3_5_linear_attention_config_fields() {
+        let path =
+            std::env::temp_dir().join(format!("ellm-qwen3-5-config-{}.json", std::process::id()));
+        fs::write(
+            &path,
+            r#"{
+              "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+              "model_type": "qwen3_5_moe",
+              "transformers_version": "5.8.1",
+              "text_config": {
+                "hidden_size": 2048,
+                "head_dim": 256,
+                "num_attention_heads": 16,
+                "num_key_value_heads": 2,
+                "num_hidden_layers": 4,
+                "layer_types": ["linear_attention", "linear_attention", "linear_attention", "full_attention"],
+                "linear_conv_kernel_dim": 4,
+                "linear_key_head_dim": 128,
+                "linear_num_key_heads": 16,
+                "linear_num_value_heads": 32,
+                "linear_value_head_dim": 128,
+                "attn_output_gate": true,
+                "attention_bias": false,
+                "rope_parameters": {
+                  "partial_rotary_factor": 0.25,
+                  "rope_theta": 10000000
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from_file(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(config.model_type, "qwen3_5_moe");
+        assert_eq!(config.architectures, ["Qwen3_5MoeForConditionalGeneration"]);
+        assert_eq!(config.hidden_size, 2048);
+        assert_eq!(config.linear_conv_kernel_dim, 4);
+        assert_eq!(config.linear_num_key_heads, 16);
+        assert_eq!(config.linear_num_value_heads, 32);
+        assert_eq!(config.linear_key_head_dim, 128);
+        assert_eq!(config.linear_value_head_dim, 128);
+        assert!(config.attn_output_gate);
+        assert_eq!(config.rope_theta, 10000000);
+        assert_eq!(config.partial_rotary_factor, 0.25);
+        assert_eq!(config.unsupported_layer_types().len(), 3);
     }
 }
