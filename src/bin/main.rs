@@ -3,6 +3,7 @@ use ellm::memory::allocator::allocate_init;
 use ellm::memory::model_loader::SafeTensorsLoader;
 use ellm::qwen3_moe::config::Config;
 use ellm::qwen3_moe::model::Model;
+use ellm::qwen3_moe::reference_cpu::{supports_config as supports_qwen35_cpu, Qwen35CpuModel};
 use ellm::serving::start::start;
 use std::env;
 
@@ -28,6 +29,51 @@ fn main() {
         "Using {}, dtype=bf16, avx512bf16=true, generated_tokens={}, batch_size={}",
         config_path, sequence_length, batch_size
     );
+
+    if supports_qwen35_cpu(&config) {
+        let weights_dir = env::var("ELLM_SAFETENSORS_DIR")
+            .expect("ELLM_SAFETENSORS_DIR is required for the Qwen3.6/Qwen3.5 CPU reference path");
+        println!("Using Qwen3.6/Qwen3.5 CPU reference executor");
+        println!("Loading safetensors from {}", weights_dir);
+        let weights = SafeTensorsLoader::new(&weights_dir)
+            .unwrap()
+            .load_all_weights_bf16_packed_moe(config.num_experts)
+            .unwrap();
+        println!("Loaded {} tensors from safetensors", weights.len());
+
+        let prompt_tokens = env::var("ELLM_PROMPT_IDS")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .filter(|part| !part.trim().is_empty())
+                    .map(|part| {
+                        part.trim()
+                            .parse::<usize>()
+                            .expect("invalid ELLM_PROMPT_IDS token id")
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|tokens| !tokens.is_empty())
+            .unwrap_or_else(|| vec![0]);
+        let max_context = env::var("ELLM_MAX_CONTEXT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(prompt_tokens.len() + sequence_length + 1);
+
+        println!(
+            "prompt_ids={:?}, max_context={}, max_new_tokens={}",
+            prompt_tokens, max_context, sequence_length
+        );
+        let mut model = Qwen35CpuModel::new(config, weights, max_context).unwrap();
+        let generated = model.generate_greedy(&prompt_tokens, sequence_length);
+        println!("Generated token ids:");
+        for (idx, token) in generated.iter().enumerate() {
+            println!("{:02}: {}", idx + 1, token);
+        }
+        return;
+    }
+
     let unsupported_layer_types = config.unsupported_layer_types();
     if !unsupported_layer_types.is_empty() {
         let preview = unsupported_layer_types

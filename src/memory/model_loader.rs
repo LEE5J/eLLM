@@ -23,6 +23,16 @@ struct AwqTensorParts {
     original_shape: Option<Vec<usize>>,
 }
 
+impl AwqTensorParts {
+    fn is_complete(&self) -> bool {
+        self.packed.is_some()
+            && self.packed_shape.is_some()
+            && self.scale.is_some()
+            && self.scale_shape.is_some()
+            && self.original_shape.is_some()
+    }
+}
+
 impl PackedExpertTensor {
     fn new(num_experts: usize, per_expert_len: usize) -> Self {
         Self {
@@ -307,6 +317,28 @@ fn dequantize_pack_quantized_int4(name: &str, parts: AwqTensorParts) -> Result<V
     Ok(output)
 }
 
+fn store_awq_tensor(
+    name: String,
+    parts: AwqTensorParts,
+    num_experts: usize,
+    all_weights: &mut HashMap<String, Vec<Bf16>>,
+    packed_experts: &mut HashMap<String, PackedExpertTensor>,
+) -> Result<()> {
+    let data = dequantize_pack_quantized_int4(&name, parts)?;
+    if num_experts > 0 {
+        if let Some((packed_name, expert_idx)) = packed_expert_name(&name) {
+            let entry = packed_experts
+                .entry(packed_name.clone())
+                .or_insert_with(|| PackedExpertTensor::new(num_experts, data.len()));
+            entry.insert(expert_idx, &data, &name)?;
+            return Ok(());
+        }
+    }
+
+    all_weights.insert(name, data);
+    Ok(())
+}
+
 // use crate::init::config::Config;
 // use crate::llama::model::Model;
 // use crate::ptensor::tensor::Tensor;
@@ -475,7 +507,7 @@ impl SafeTensorsLoader {
             for (name, tensor_view) in safetensors.tensors() {
                 let raw_data = tensor_view.data();
                 if let Some((weight_name, part)) = awq_part_name(&name) {
-                    let entry = awq_parts.entry(weight_name).or_default();
+                    let entry = awq_parts.entry(weight_name.clone()).or_default();
                     match part {
                         AwqPart::Packed => {
                             if tensor_view.dtype() != Dtype::I32 {
@@ -507,6 +539,20 @@ impl SafeTensorsLoader {
                             entry.original_shape = Some(read_i64_shape(raw_data, &name)?);
                         }
                     }
+                    let completed_name = awq_parts
+                        .get(&weight_name)
+                        .filter(|parts| parts.is_complete())
+                        .map(|_| weight_name.clone());
+                    if let Some(completed_name) = completed_name {
+                        let parts = awq_parts.remove(&completed_name).unwrap();
+                        store_awq_tensor(
+                            completed_name,
+                            parts,
+                            num_experts,
+                            &mut all_weights,
+                            &mut packed_experts,
+                        )?;
+                    }
                     continue;
                 }
 
@@ -530,18 +576,13 @@ impl SafeTensorsLoader {
         }
 
         for (name, parts) in awq_parts {
-            let data = dequantize_pack_quantized_int4(&name, parts)?;
-            if num_experts > 0 {
-                if let Some((packed_name, expert_idx)) = packed_expert_name(&name) {
-                    let entry = packed_experts
-                        .entry(packed_name.clone())
-                        .or_insert_with(|| PackedExpertTensor::new(num_experts, data.len()));
-                    entry.insert(expert_idx, &data, &name)?;
-                    continue;
-                }
-            }
-
-            all_weights.insert(name, data);
+            store_awq_tensor(
+                name,
+                parts,
+                num_experts,
+                &mut all_weights,
+                &mut packed_experts,
+            )?;
         }
 
         for (name, packed) in packed_experts {
@@ -571,14 +612,20 @@ mod tests {
     use safetensors::tensor::TensorView;
     use safetensors::{serialize_to_file, Dtype};
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_temp_dir() -> std::path::PathBuf {
+        static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("ellm-safetensors-test-{nonce}"))
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "ellm-safetensors-test-{}-{nonce}-{counter}",
+            std::process::id()
+        ))
     }
 
     #[test]

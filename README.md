@@ -16,7 +16,7 @@ than building the experiment around an AVX-512 FP16 path.
 | --- | --- |
 | Model format | Hugging Face `safetensors` shards and compressed-tensors AWQ |
 | BF16 test model | Qwen3-Coder-30B-A3B-Instruct BF16 |
-| AWQ test target | cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit compatibility inspection |
+| AWQ test target | Experimental CPU reference path for cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit |
 | Primary runtime target | eLLM Rust CPU executor, AVX-512 BF16 |
 | GPU usage | Not used |
 | OpenAI-compatible API | CPU-only local compatibility wrapper for the BF16 baseline |
@@ -66,10 +66,13 @@ the eLLM Rust BF16 test path.
 - The reported output quality was confirmed to be normal for short test prompts.
 - The benchmark target is the eLLM Rust CPU path. The Python scripts are
   CPU-only helper tools for verification and OpenAI API compatibility checks.
-- The Qwen3.6 AWQ target is not runnable in the eLLM CPU executor yet. Its
-  compressed-tensors expert weights can be unpacked, and the nested config is
-  parsed, but 30 of 40 text layers use GatedDeltaNet `linear_attention`, which
-  still needs to be integrated into the eLLM CPU executor.
+- The Qwen3.6 AWQ target has an experimental CPU reference executor for token-id
+  generation. It covers GatedDeltaNet `linear_attention`, gated full attention,
+  routed MoE experts, and shared experts, but it is not optimized yet. The
+  current loader dequantizes AWQ expert weights to BF16 in host memory.
+- On the test system, a CPU-only Qwen3.6 AWQ smoke run with `ELLM_PROMPT_IDS=0`,
+  `ELLM_GENERATE_TOKENS=1`, and `ELLM_MAX_CONTEXT=2` completed in 55.43 seconds,
+  generated token id `222033`, and reached 83,559,080 KB peak RSS.
 - The local model directory is intentionally ignored by Git because the full
   weight set is tens of GiB.
 - This is an experimental baseline; performance numbers depend heavily on memory
@@ -95,7 +98,7 @@ AMD Ryzen 시스템에서 eLLM CPU 런타임으로 실행해 보기 위한 실�
 | --- | --- |
 | 모델 형식 | Hugging Face `safetensors` 샤드 및 compressed-tensors AWQ |
 | BF16 테스트 모델 | Qwen3-Coder-30B-A3B-Instruct BF16 |
-| AWQ 테스트 대상 | cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit 호환성 점검 |
+| AWQ 테스트 대상 | cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit 실험적 CPU reference 경로 |
 | 주 실행 대상 | eLLM Rust CPU executor, AVX-512 BF16 |
 | GPU 사용 | 사용하지 않음 |
 | OpenAI 호환 API | BF16 기준선 확인용 CPU 전용 로컬 호환 wrapper |
@@ -144,10 +147,13 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
 - 짧은 테스트 프롬프트 기준으로 답변 품질은 정상적으로 나오는 것을 확인했습니다.
 - 성능 측정 기준은 eLLM Rust CPU 경로입니다. Python 스크립트는 safetensors
   검증과 OpenAI API 호환성 확인을 위한 CPU 전용 보조 도구입니다.
-- Qwen3.6 AWQ 대상은 아직 eLLM CPU 실행기에서 실제 생성까지 실행할 수
-  없습니다. compressed-tensors expert weight unpack과 중첩 config 파싱은
-  추가했지만, text layer 40개 중 30개가 GatedDeltaNet `linear_attention`을
-  사용하므로 eLLM CPU 실행기에 해당 경로를 통합하는 작업이 더 필요합니다.
+- Qwen3.6 AWQ 대상은 token id 생성을 위한 실험적 CPU reference executor를
+  추가했습니다. GatedDeltaNet `linear_attention`, gated full attention, routed
+  MoE expert, shared expert를 계산하지만 아직 최적화된 경로는 아닙니다. 현재
+  loader는 AWQ expert weight를 host memory에서 BF16으로 dequantize합니다.
+- 테스트 시스템에서 `ELLM_PROMPT_IDS=0`, `ELLM_GENERATE_TOKENS=1`,
+  `ELLM_MAX_CONTEXT=2`로 Qwen3.6 AWQ CPU-only smoke run을 수행했고,
+  55.43초에 token id `222033`을 생성했으며 peak RSS는 83,559,080 KB였습니다.
 - 전체 모델 가중치는 수십 GiB 규모이므로 Git에서 제외했습니다.
 - 성능 수치는 메모리 속도, CPU 클럭, 프롬프트 길이, 컨텍스트 길이에 크게 영향을
   받습니다.

@@ -66,9 +66,10 @@ hf download cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit \
 ```
 
 The AWQ model uses `compressed-tensors` quantization. The current eLLM CPU path
-can inspect the config and unpack compressed expert weights, but it cannot run
-generation yet because the model requires GatedDeltaNet `linear_attention` to be
-integrated into the eLLM CPU executor.
+includes an experimental reference executor for this mixed Qwen3.6/Qwen3.5 MoE
+architecture. It computes token ids on CPU only, but it is intentionally
+conservative and not optimized; the current loader dequantizes AWQ expert
+weights to BF16 in host memory.
 
 ## 3. Verify Safetensors Loading
 
@@ -180,28 +181,41 @@ cargo run --release --bin main
 The binary currently prints generated token ids rather than a decoded text
 response.
 
-## 6. Check the Qwen3.6 AWQ CPU Status
+## 6. Run the Qwen3.6 AWQ CPU Reference Path
 
-Run the same Rust entry point with the Qwen3.6 AWQ config to verify the current
-CPU/eLLM compatibility boundary:
+Run the same Rust entry point with the Qwen3.6 AWQ config. The mixed
+`linear_attention`/`full_attention` config is detected automatically and routed
+to the CPU reference executor:
 
 ```bash
 ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
 ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
 ELLM_GENERATE_TOKENS=1 \
+ELLM_PROMPT_IDS=0 \
+ELLM_MAX_CONTEXT=2 \
 RUSTFLAGS='-C target-cpu=native' \
-cargo run --bin main
+cargo run --release --bin main
 ```
 
-Expected result today: the program exits before loading all weights and reports
-that 30 `linear_attention` layers require the GatedDeltaNet CPU path to be wired
-into the executor. This is intentional; Qwen3.6 AWQ should be considered
-unsupported in eLLM CPU generation until that integration is complete.
+`ELLM_PROMPT_IDS` accepts comma-separated token ids. The binary currently prints
+generated token ids rather than decoded text. Expect high memory use and slow
+throughput in this path because it is a correctness-oriented CPU reference path,
+not the final optimized AWQ kernel path.
+
+On the documented test system, the command above completed without GPU offload
+in 55.43 seconds, generated token id `222033`, and reached 83,559,080 KB peak
+RSS.
 
 To test the AWQ unpacking logic itself:
 
 ```bash
 RUSTFLAGS='-C target-cpu=native' cargo test --lib model_loader
+```
+
+To test the Qwen3.6/Qwen3.5 CPU reference math on small synthetic tensors:
+
+```bash
+RUSTFLAGS='-C target-cpu=native' cargo test --lib qwen3_moe::reference_cpu
 ```
 
 ---
@@ -272,9 +286,10 @@ hf download cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit \
 ```
 
 이 AWQ 모델은 `compressed-tensors` quantization을 사용합니다. 현재 eLLM CPU
-경로는 config 점검과 압축된 expert weight unpack까지는 가능하지만,
-GatedDeltaNet `linear_attention` 경로가 아직 eLLM CPU 실행기에 통합되지 않아
-실제 생성 실행은 불가능합니다.
+경로에는 이 mixed Qwen3.6/Qwen3.5 MoE 구조를 위한 실험적 reference executor가
+추가되어 있습니다. CPU만 사용해 token id를 생성하지만, 아직 최적화된 경로는
+아닙니다. 현재 loader는 AWQ expert weight를 host memory에서 BF16으로
+dequantize합니다.
 
 ## 3. Safetensors 로딩 검증
 
@@ -384,26 +399,39 @@ cargo run --release --bin main
 
 현재 Rust 바이너리는 디코딩된 텍스트가 아니라 생성된 token id를 출력합니다.
 
-## 6. Qwen3.6 AWQ CPU 상태 확인
+## 6. Qwen3.6 AWQ CPU reference 경로 실행
 
-Qwen3.6 AWQ config로 같은 Rust entry point를 실행하면 현재 eLLM CPU 호환성
-경계를 확인할 수 있습니다.
+Qwen3.6 AWQ config로 같은 Rust entry point를 실행합니다. mixed
+`linear_attention`/`full_attention` config는 자동으로 감지되어 CPU reference
+executor로 들어갑니다.
 
 ```bash
 ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
 ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
 ELLM_GENERATE_TOKENS=1 \
+ELLM_PROMPT_IDS=0 \
+ELLM_MAX_CONTEXT=2 \
 RUSTFLAGS='-C target-cpu=native' \
-cargo run --bin main
+cargo run --release --bin main
 ```
 
-현재 예상 결과는 전체 weight를 로드하기 전에 종료하면서, 30개의
-`linear_attention` layer에 GatedDeltaNet CPU 경로 통합이 필요하다고 출력하는
-것입니다. 이는 의도한 동작이며, 해당 통합이 완료되기 전까지 Qwen3.6 AWQ는 eLLM
-CPU 생성에서 미지원 상태로 봐야 합니다.
+`ELLM_PROMPT_IDS`는 쉼표로 구분한 token id를 받습니다. 현재 바이너리는 디코딩된
+텍스트가 아니라 생성된 token id를 출력합니다. 이 경로는 최종 최적화 AWQ kernel
+경로가 아니라 정확성 확인을 위한 CPU reference 경로이므로 메모리 사용량이 크고
+처리 속도도 느릴 수 있습니다.
+
+문서화한 테스트 시스템에서는 위 명령이 GPU offload 없이 55.43초에 완료됐고,
+token id `222033`을 생성했으며 peak RSS는 83,559,080 KB였습니다.
 
 AWQ unpack 로직 자체는 아래 명령으로 테스트할 수 있습니다.
 
 ```bash
 RUSTFLAGS='-C target-cpu=native' cargo test --lib model_loader
+```
+
+Qwen3.6/Qwen3.5 CPU reference 연산 자체는 작은 synthetic tensor로 아래처럼
+검증할 수 있습니다.
+
+```bash
+RUSTFLAGS='-C target-cpu=native' cargo test --lib qwen3_moe::reference_cpu
 ```
