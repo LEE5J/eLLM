@@ -2,12 +2,21 @@ use regex::{Regex, RegexSet};
 use std::collections::HashMap;
 
 use super::allocator::allocate_init;
+
+fn is_synthetic_runtime_weight(name: &str) -> bool {
+    matches!(
+        name,
+        "model.position_embedding.weight" | "model.rotary_emb.weight"
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct Cache<T> {
     pub storge: HashMap<String, *mut T>,
     regex_set: RegexSet,
     layer_regex: Regex,
     parameters: HashMap<String, Vec<T>>,
+    parameter_loading_enabled: bool,
 }
 
 impl<T> Cache<T>
@@ -27,11 +36,14 @@ where
         .unwrap();
         let layer_regex = Regex::new(r"model\.layers\.\d+\.(.*)").unwrap();
 
+        let parameter_loading_enabled = !parameters.is_empty();
+
         Self {
             storge: HashMap::new(),
             regex_set: regex_set,
             layer_regex: layer_regex,
             parameters: parameters,
+            parameter_loading_enabled,
         }
     }
 
@@ -50,21 +62,31 @@ where
                 0 => {
                     // parameters
                     // println!("parameters {} ", name);
-                    
-                    /*
+
                     match self.parameters.remove(name) {
                         Some(data) => {
+                            assert_eq!(
+                                data.len(),
+                                size,
+                                "Parameter {} shape mismatch: safetensors has {} elements, tensor expects {}",
+                                name,
+                                data.len(),
+                                size
+                            );
                             // 将Vec<T>转换为Box<[T]>然后泄露到堆上获取指针
                             let boxed_slice = data.into_boxed_slice();
                             let data_ptr: *mut T = Box::leak(boxed_slice).as_mut_ptr();
                             self.storge.insert(name.to_owned(), data_ptr);
                             data_ptr
                         }
-                        None => panic!("Parameter {} not found", name),
+                        None if is_synthetic_runtime_weight(name) => {
+                            allocate_init(size, T::default())
+                        }
+                        None if !self.parameter_loading_enabled => {
+                            allocate_init(size, T::default())
+                        }
+                        None => panic!("Parameter {} not found in loaded safetensors", name),
                     }
-                    */
-                    let data_ptr: *mut T = allocate_init(size, T::default());
-                    data_ptr
                 }
                 1 => {
                     // kv

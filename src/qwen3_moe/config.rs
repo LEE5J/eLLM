@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub architectures: Vec<String>,
@@ -24,17 +28,20 @@ pub struct Config {
     pub num_hidden_layers: usize,
     pub num_key_value_heads: usize,
     pub output_router_logits: bool,
+    #[serde(default)]
     pub qkv_bias: bool,
     pub rms_norm_eps: f32,
     pub rope_scaling: Option<HashMap<String, String>>,
     pub rope_theta: usize,
     pub router_aux_loss_coef: f32,
+    #[serde(default)]
     pub shared_experts_intermediate_size: usize,
     pub sliding_window: Option<usize>,
     pub tie_word_embeddings: bool,
     pub torch_dtype: String,
     pub transformers_version: String,
     pub use_cache: bool,
+    #[serde(default = "default_true")]
     pub use_qk_norm: bool,
     pub use_sliding_window: bool,
     pub vocab_size: usize,

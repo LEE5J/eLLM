@@ -10,6 +10,7 @@
 #![allow(incomplete_features)]
 #![allow(unused_parens)]
 
+pub mod bfloat16;
 pub mod compiler;
 pub mod init;
 pub mod kernel;

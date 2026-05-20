@@ -66,9 +66,9 @@ where
             // let decode_queue_slice = &queue[decode_start.min(queue.len())..];
 
             let s = Instant::now();
-            for _p in 0..sequence_length {
+            for position in 0..sequence_length {
                 for operator in queue.iter() {
-                    operator.run(0, 1, batch_size, thread_num, thread_id);
+                    operator.run(position, 1, batch_size, thread_num, thread_id);
                     b.wait();
                 }
             }

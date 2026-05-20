@@ -1,6 +1,7 @@
 // === compiler/mul/matmul.rs ===
 #![allow(non_snake_case)]
 
+use crate::bfloat16::Bf16;
 use std::f16;
 use std::marker::PhantomData;
 use std::ops::{Add, Mul};
@@ -259,6 +260,41 @@ impl MatMulTrait<f16> for MatMul<f16> {
         }
 
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512fp16")))]
+        kernel::generic::dot_product::dot_product(input_ptr1, input_ptr2, output_ptr, length);
+    }
+}
+
+impl MatMulTrait<Bf16> for MatMul<Bf16> {
+    fn compute(&self, input_ptr1: *const Bf16, input_ptr2: *const Bf16, output_ptr: *mut Bf16) {
+        let call_param = MatMulParams {
+            a_row_step_macro: self.k_max,
+            b_row_step_macro: self.n_max,
+            column_step_macro: self.params.column_step_macro,
+            a_row_step_micro: self.params.a_row_step_micro,
+            b_row_step_micro: self.params.b_row_step_micro,
+        };
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512bf16"))]
+        unsafe {
+            kernel::x86_64::bf16_512::matmul_block::matmul_block(
+                input_ptr1,
+                input_ptr2,
+                output_ptr,
+                &call_param,
+            );
+        }
+
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bf16")))]
+        kernel::generic::matmul_block::matmul_block(input_ptr1, input_ptr2, output_ptr, &call_param);
+    }
+
+    fn compute2(
+        &self,
+        input_ptr1: *const Bf16,
+        input_ptr2: *const Bf16,
+        output_ptr: *mut Bf16,
+        length: usize,
+    ) {
         kernel::generic::dot_product::dot_product(input_ptr1, input_ptr2, output_ptr, length);
     }
 }

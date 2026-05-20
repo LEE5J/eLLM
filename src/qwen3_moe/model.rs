@@ -1,6 +1,7 @@
 use core_affinity;
 use std::cell::RefCell;
 use std::cell::SyncUnsafeCell;
+use std::collections::HashMap;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 use std::ptr::null;
 use std::rc::Rc;
@@ -76,12 +77,29 @@ where
         batch_size: usize,
         topk_size: usize,
     ) -> Self {
+        Self::new_with_parameters(
+            config,
+            sequence_length,
+            sequence_chunk_size,
+            batch_size,
+            topk_size,
+            HashMap::new(),
+        )
+    }
+
+    pub fn new_with_parameters(
+        config: &Config,
+        sequence_length: usize,
+        sequence_chunk_size: usize,
+        batch_size: usize,
+        topk_size: usize,
+        parameter_tensors: HashMap<String, Vec<T>>,
+    ) -> Self {
         let scope_name = String::from("model");
 
         // let torch_file = String::from("D:/llama-3-chinese-8b-instruct-v3");
         // let loader = SafeTensorsLoader::new(&torch_file).unwrap();
         // let tensors = loader.load_all_weights_f16().unwrap();
-        let parameter_tensors = std::collections::HashMap::new();
         let cache = Rc::new(RefCell::new(Cache::new(parameter_tensors)));
         let operator_queue: Rc<RefCell<Vec<Operator<T>>>> = Rc::new(RefCell::new(Vec::new()));
 

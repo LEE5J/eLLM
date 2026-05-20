@@ -1,3 +1,6 @@
+use crate::bfloat16::Bf16;
+use std::f16;
+
 pub trait FromF32 {
     fn from_f32(n: f32) -> Self;
 }
@@ -5,6 +8,12 @@ pub trait FromF32 {
 impl FromF32 for f16 {
     fn from_f32(n: f32) -> Self {
         n as f16
+    }
+}
+
+impl FromF32 for Bf16 {
+    fn from_f32(n: f32) -> Self {
+        Bf16::from_f32(n)
     }
 }
 

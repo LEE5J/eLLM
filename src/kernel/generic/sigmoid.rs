@@ -1,4 +1,5 @@
 use std::ops::{Add, Mul, Div};
+use crate::bfloat16::Bf16;
 use std::f16;
 
 pub trait Sigmoid<T> {
@@ -23,6 +24,12 @@ impl Sigmoid<f16> for f16 {
     }
 }
 
+
+impl Sigmoid<Bf16> for Bf16 {
+    fn sigmoid(self) -> Self {
+        Bf16::from_f32(1.0 / (1.0 + (-self.to_f32()).exp()))
+    }
+}
 
 impl Sigmoid<f32> for f32 {
     fn sigmoid(self) -> Self {

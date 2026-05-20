@@ -1,6 +1,7 @@
 // === compiler/mul/matmul_topk.rs ===
 #![allow(non_snake_case)]
 
+use crate::bfloat16::Bf16;
 use std::f16;
 use std::marker::PhantomData;
 use std::ops::{Add, Mul};
@@ -375,6 +376,35 @@ impl MatMulTopKTrait<f16> for MatMulTopK<f16> {
             kernel::x86_64::f16_512::matmul_block::matmul_block(input_ptr1, input_ptr2, output_ptr, &call_param);
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512fp16")))]
+        {
+            kernel::generic::matmul_block::matmul_block(input_ptr1, input_ptr2, output_ptr, &call_param);
+        }
+    }
+}
+
+impl MatMulTopKTrait<Bf16> for MatMulTopK<Bf16> {
+    fn compute(&self, input_ptr1: *const Bf16, input_ptr2: *const Bf16, output_ptr: *mut Bf16) {
+        let mr = self.params.a_row_step_micro.max(1);
+        let nr = self.params.b_row_step_micro.max(1);
+
+        let call_param = MatMulParams {
+            a_row_step_macro: self.column,
+            b_row_step_macro: nr,
+            column_step_macro: self.params.column_step_macro,
+            a_row_step_micro: mr,
+            b_row_step_micro: nr,
+        };
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx512bf16"))]
+        unsafe {
+            kernel::x86_64::bf16_512::matmul_block::matmul_block(
+                input_ptr1,
+                input_ptr2,
+                output_ptr,
+                &call_param,
+            );
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx512bf16")))]
         {
             kernel::generic::matmul_block::matmul_block(input_ptr1, input_ptr2, output_ptr, &call_param);
         }

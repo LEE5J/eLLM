@@ -24,3 +24,10 @@ target
 
 
 experiment/
+
+# Local model assets
+models/Qwen3-Coder-30B-A3B-Instruct-full/
+
+# Python generated files
+__pycache__/
+*.py[cod]

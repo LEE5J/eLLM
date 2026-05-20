@@ -1,3 +1,4 @@
+use crate::bfloat16::Bf16;
 use std::f16;
 
 pub trait NegInfinity {
@@ -7,6 +8,12 @@ pub trait NegInfinity {
 impl NegInfinity for f16 {
     fn neg_infinity() -> Self {
         f16::NEG_INFINITY
+    }
+}
+
+impl NegInfinity for Bf16 {
+    fn neg_infinity() -> Self {
+        Bf16::NEG_INFINITY
     }
 }
 
