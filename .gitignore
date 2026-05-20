@@ -27,6 +27,7 @@ experiment/
 
 # Local model assets
 models/Qwen3-Coder-30B-A3B-Instruct-full/
+models/Qwen3.6-35B-A3B-AWQ-4bit/
 
 # Python generated files
 __pycache__/

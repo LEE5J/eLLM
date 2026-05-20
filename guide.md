@@ -10,7 +10,7 @@ test path.
 | --- | --- |
 | OS | Linux x86_64 |
 | CPU | AVX-512 BF16 is required for the Rust BF16 path |
-| RAM | 128 GiB was used for the reported Qwen3-Coder-30B-A3B run |
+| RAM | 128 GiB was used for the reported Qwen3-Coder-30B-A3B BF16 run |
 | Python | A virtual environment is recommended |
 | Rust | Nightly toolchain, configured by `rust-toolchain.toml` |
 
@@ -19,16 +19,25 @@ Install Python dependencies in a local virtual environment:
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install torch transformers safetensors accelerate
+python -m pip install torch transformers safetensors accelerate huggingface_hub
+```
+
+If your virtual environment does not include `pip`, use `uv`:
+
+```bash
+uv pip install --python .venv/bin/python \
+  torch transformers safetensors accelerate huggingface_hub
 ```
 
 Use the PyTorch install command that matches your platform if you need a
-specific CPU or CUDA wheel.
+specific CPU wheel.
 
-## 2. Prepare the Model Directory
+## 2. Prepare a Model
 
-The full model weights are not stored in this repository. Put the Hugging Face
-Qwen3-Coder BF16 `safetensors` files under this path:
+The full model weights are not stored in this repository.
+
+For the BF16 Qwen3-Coder test path, put the Hugging Face `safetensors` files
+under this path:
 
 ```text
 models/Qwen3-Coder-30B-A3B-Instruct-full/
@@ -45,10 +54,24 @@ model-00001-of-00016.safetensors
 ...
 ```
 
+For the AWQ 4-bit Qwen3.6 compatibility target, download it to a local ignored
+directory:
+
+```bash
+hf download cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit \
+  --local-dir models/Qwen3.6-35B-A3B-AWQ-4bit
+```
+
+The AWQ model uses `compressed-tensors` quantization. The current eLLM CPU path
+can inspect the config and unpack compressed expert weights, but it cannot run
+generation yet because the model requires GatedDeltaNet `linear_attention`
+operators.
+
 ## 3. Verify Safetensors Loading
 
-Run the Python verification script first. It checks the shard metadata, loads the
-model through Transformers, and generates a short answer.
+Run the Python verification script first for the BF16 Qwen3-Coder baseline. It
+checks shard metadata and generates a short answer on the host CPU. This is a
+baseline validation step, not the Qwen3.6 AWQ eLLM runtime path.
 
 ```bash
 .venv/bin/python scripts/verify_safetensors_generation.py \
@@ -151,6 +174,30 @@ cargo run --release --bin main
 The binary currently prints generated token ids rather than a decoded text
 response.
 
+## 6. Check the Qwen3.6 AWQ CPU Status
+
+Run the same Rust entry point with the Qwen3.6 AWQ config to verify the current
+CPU/eLLM compatibility boundary:
+
+```bash
+ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
+ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
+ELLM_GENERATE_TOKENS=1 \
+RUSTFLAGS='-C target-cpu=native' \
+cargo run --bin main
+```
+
+Expected result today: the program exits before loading all weights and reports
+that 30 `linear_attention` layers require a GatedDeltaNet CPU operator. This is
+intentional; Qwen3.6 AWQ should be considered unsupported in eLLM CPU generation
+until that operator exists.
+
+To test the AWQ unpacking logic itself:
+
+```bash
+RUSTFLAGS='-C target-cpu=native' cargo test --lib model_loader
+```
+
 ---
 
 # 실행 가이드
@@ -164,7 +211,7 @@ BF16 테스트 실행 방법을 정리합니다.
 | --- | --- |
 | OS | Linux x86_64 |
 | CPU | Rust BF16 경로 실행에는 AVX-512 BF16 필요 |
-| RAM | 보고된 Qwen3-Coder-30B-A3B 실행은 128 GiB 환경에서 테스트 |
+| RAM | 보고된 Qwen3-Coder-30B-A3B BF16 실행은 128 GiB 환경에서 테스트 |
 | Python | 가상 환경 사용 권장 |
 | Rust | `rust-toolchain.toml`에서 nightly 사용 |
 
@@ -173,16 +220,25 @@ Python 의존성은 로컬 가상 환경에 설치하는 것을 권장합니다.
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install torch transformers safetensors accelerate
+python -m pip install torch transformers safetensors accelerate huggingface_hub
 ```
 
-CPU 전용 또는 CUDA wheel이 따로 필요하면 본인 환경에 맞는 PyTorch 설치 명령을
-사용하면 됩니다.
+가상 환경에 `pip`가 없다면 `uv`를 사용할 수 있습니다.
 
-## 2. 모델 디렉터리 준비
+```bash
+uv pip install --python .venv/bin/python \
+  torch transformers safetensors accelerate huggingface_hub
+```
 
-전체 모델 가중치는 이 저장소에 포함되어 있지 않습니다. Hugging Face
-Qwen3-Coder BF16 `safetensors` 파일을 아래 경로에 배치합니다.
+CPU 전용 wheel이 따로 필요하면 본인 환경에 맞는 PyTorch 설치 명령을 사용하면
+됩니다.
+
+## 2. 모델 준비
+
+전체 모델 가중치는 이 저장소에 포함되어 있지 않습니다.
+
+BF16 Qwen3-Coder 테스트 경로는 Hugging Face `safetensors` 파일을 아래 경로에
+배치합니다.
 
 ```text
 models/Qwen3-Coder-30B-A3B-Instruct-full/
@@ -199,10 +255,24 @@ model-00001-of-00016.safetensors
 ...
 ```
 
+AWQ 4-bit Qwen3.6 호환성 점검 대상은 Git에서 제외되는 로컬 디렉터리에 먼저
+내려받을 수 있습니다.
+
+```bash
+hf download cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit \
+  --local-dir models/Qwen3.6-35B-A3B-AWQ-4bit
+```
+
+이 AWQ 모델은 `compressed-tensors` quantization을 사용합니다. 현재 eLLM CPU
+경로는 config 점검과 압축된 expert weight unpack까지는 가능하지만,
+GatedDeltaNet `linear_attention` operator가 아직 없어서 실제 생성 실행은
+불가능합니다.
+
 ## 3. Safetensors 로딩 검증
 
-먼저 Python 검증 스크립트를 실행합니다. 이 스크립트는 shard 메타데이터를 확인한
-뒤 Transformers로 모델을 로드하고 짧은 답변을 생성합니다.
+먼저 BF16 Qwen3-Coder 기준선에 대해 Python 검증 스크립트를 실행합니다. 이
+스크립트는 shard 메타데이터를 확인하고 host CPU에서 짧은 답변을 생성합니다.
+이는 기준선 검증 단계이며, Qwen3.6 AWQ의 eLLM 실행 경로가 아닙니다.
 
 ```bash
 .venv/bin/python scripts/verify_safetensors_generation.py \
@@ -302,3 +372,27 @@ cargo run --release --bin main
 ```
 
 현재 Rust 바이너리는 디코딩된 텍스트가 아니라 생성된 token id를 출력합니다.
+
+## 6. Qwen3.6 AWQ CPU 상태 확인
+
+Qwen3.6 AWQ config로 같은 Rust entry point를 실행하면 현재 eLLM CPU 호환성
+경계를 확인할 수 있습니다.
+
+```bash
+ELLM_CONFIG=models/Qwen3.6-35B-A3B-AWQ-4bit/config.json \
+ELLM_SAFETENSORS_DIR=models/Qwen3.6-35B-A3B-AWQ-4bit \
+ELLM_GENERATE_TOKENS=1 \
+RUSTFLAGS='-C target-cpu=native' \
+cargo run --bin main
+```
+
+현재 예상 결과는 전체 weight를 로드하기 전에 종료하면서, 30개의
+`linear_attention` layer에 GatedDeltaNet CPU operator가 필요하다고 출력하는
+것입니다. 이는 의도한 동작이며, 해당 operator가 구현되기 전까지 Qwen3.6 AWQ는
+eLLM CPU 생성에서 미지원 상태로 봐야 합니다.
+
+AWQ unpack 로직 자체는 아래 명령으로 테스트할 수 있습니다.
+
+```bash
+RUSTFLAGS='-C target-cpu=native' cargo test --lib model_loader
+```

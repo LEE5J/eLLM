@@ -28,6 +28,23 @@ fn main() {
         "Using {}, dtype=bf16, avx512bf16=true, generated_tokens={}, batch_size={}",
         config_path, sequence_length, batch_size
     );
+    let unsupported_layer_types = config.unsupported_layer_types();
+    if !unsupported_layer_types.is_empty() {
+        let preview = unsupported_layer_types
+            .iter()
+            .take(8)
+            .map(|(idx, layer_type)| format!("{}:{}", idx, layer_type))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "This eLLM CPU executor currently supports full_attention Qwen3-MoE layers only. \
+             The loaded config contains unsupported layer types ({} total; first: {}). \
+             Qwen3.6/Qwen3.5 MoE models require a GatedDeltaNet linear_attention CPU operator before they can run here.",
+            unsupported_layer_types.len(),
+            preview
+        );
+        std::process::exit(2);
+    }
 
     let mut model = if let Ok(weights_dir) = env::var("ELLM_SAFETENSORS_DIR") {
         println!("Loading safetensors from {}", weights_dir);

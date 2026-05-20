@@ -14,6 +14,15 @@ struct PackedExpertTensor {
     per_expert_len: usize,
 }
 
+#[derive(Default)]
+struct AwqTensorParts {
+    packed: Option<Vec<i32>>,
+    packed_shape: Option<Vec<usize>>,
+    scale: Option<Vec<Bf16>>,
+    scale_shape: Option<Vec<usize>>,
+    original_shape: Option<Vec<usize>>,
+}
+
 impl PackedExpertTensor {
     fn new(num_experts: usize, per_expert_len: usize) -> Self {
         Self {
@@ -55,13 +64,12 @@ impl PackedExpertTensor {
     }
 
     fn finish(self, tensor_name: &str) -> Result<Vec<Bf16>> {
-        if let Some((idx, _)) = self
-            .filled
-            .iter()
-            .enumerate()
-            .find(|(_, filled)| !**filled)
-        {
-            return Err(anyhow!("Missing expert {} while packing {}", idx, tensor_name));
+        if let Some((idx, _)) = self.filled.iter().enumerate().find(|(_, filled)| !**filled) {
+            return Err(anyhow!(
+                "Missing expert {} while packing {}",
+                idx,
+                tensor_name
+            ));
         }
         Ok(self.data)
     }
@@ -94,6 +102,38 @@ fn packed_expert_name(name: &str) -> Option<(String, usize)> {
     ))
 }
 
+fn canonical_weight_name(name: &str) -> Option<String> {
+    if name.starts_with("model.visual.") || name.starts_with("mtp.") {
+        return None;
+    }
+
+    Some(
+        name.strip_prefix("model.language_model.")
+            .map(|suffix| format!("model.{}", suffix))
+            .unwrap_or_else(|| name.to_string()),
+    )
+}
+
+enum AwqPart {
+    Packed,
+    Scale,
+    Shape,
+}
+
+fn awq_part_name(name: &str) -> Option<(String, AwqPart)> {
+    let (base, part) = if let Some(base) = name.strip_suffix(".weight_packed") {
+        (base, AwqPart::Packed)
+    } else if let Some(base) = name.strip_suffix(".weight_scale") {
+        (base, AwqPart::Scale)
+    } else if let Some(base) = name.strip_suffix(".weight_shape") {
+        (base, AwqPart::Shape)
+    } else {
+        return None;
+    };
+
+    canonical_weight_name(&format!("{}.weight", base)).map(|name| (name, part))
+}
+
 fn f16_bits_to_f32(bits: u16) -> f32 {
     let sign = ((bits & 0x8000) as u32) << 16;
     let exponent = (bits >> 10) & 0x1f;
@@ -117,6 +157,154 @@ fn f16_bits_to_f32(bits: u16) -> f32 {
         0x1f => f32::from_bits(sign | 0x7f80_0000 | (fraction << 13)),
         _ => f32::from_bits(sign | (((exponent as u32) + 112) << 23) | (fraction << 13)),
     }
+}
+
+fn read_i32_data(raw_data: &[u8], tensor_name: &str) -> Result<Vec<i32>> {
+    if raw_data.len() % 4 != 0 {
+        return Err(anyhow!(
+            "I32 tensor {} has invalid byte length",
+            tensor_name
+        ));
+    }
+    Ok(raw_data
+        .chunks_exact(4)
+        .map(|chunk| i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect())
+}
+
+fn read_i64_shape(raw_data: &[u8], tensor_name: &str) -> Result<Vec<usize>> {
+    if raw_data.len() % 8 != 0 {
+        return Err(anyhow!(
+            "I64 tensor {} has invalid byte length",
+            tensor_name
+        ));
+    }
+    raw_data
+        .chunks_exact(8)
+        .map(|chunk| {
+            let value = i64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+            ]);
+            usize::try_from(value).map_err(|_| {
+                anyhow!(
+                    "I64 tensor {} has negative shape value {}",
+                    tensor_name,
+                    value
+                )
+            })
+        })
+        .collect()
+}
+
+fn read_bf16_compatible_data(
+    raw_data: &[u8],
+    dtype: Dtype,
+    tensor_name: &str,
+) -> Result<Vec<Bf16>> {
+    match dtype {
+        Dtype::BF16 => Ok(raw_data
+            .chunks_exact(2)
+            .map(|chunk| Bf16::from_bits(u16::from_le_bytes([chunk[0], chunk[1]])))
+            .collect()),
+        Dtype::F16 => Ok(raw_data
+            .chunks_exact(2)
+            .map(|chunk| f16_bits_to_f32(u16::from_le_bytes([chunk[0], chunk[1]])))
+            .map(Bf16::from_f32)
+            .collect()),
+        Dtype::F32 => Ok(raw_data
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .map(Bf16::from_f32)
+            .collect()),
+        _ => Err(anyhow!(
+            "Unsupported tensor dtype for {}: {:?}",
+            tensor_name,
+            dtype
+        )),
+    }
+}
+
+fn dequantize_pack_quantized_int4(name: &str, parts: AwqTensorParts) -> Result<Vec<Bf16>> {
+    let packed = parts
+        .packed
+        .ok_or_else(|| anyhow!("AWQ tensor {} is missing weight_packed", name))?;
+    let packed_shape = parts
+        .packed_shape
+        .ok_or_else(|| anyhow!("AWQ tensor {} is missing packed shape", name))?;
+    let scale = parts
+        .scale
+        .ok_or_else(|| anyhow!("AWQ tensor {} is missing weight_scale", name))?;
+    let scale_shape = parts
+        .scale_shape
+        .ok_or_else(|| anyhow!("AWQ tensor {} is missing scale shape", name))?;
+    let original_shape = parts
+        .original_shape
+        .ok_or_else(|| anyhow!("AWQ tensor {} is missing weight_shape", name))?;
+
+    if packed_shape.len() != 2 || scale_shape.len() != 2 || original_shape.len() != 2 {
+        return Err(anyhow!(
+            "AWQ tensor {} expects 2D packed/scale/original shapes, got {:?}/{:?}/{:?}",
+            name,
+            packed_shape,
+            scale_shape,
+            original_shape
+        ));
+    }
+
+    let rows = original_shape[0];
+    let cols = original_shape[1];
+    let packed_cols = packed_shape[1];
+    let scale_cols = scale_shape[1];
+    if packed_shape[0] != rows || packed.len() != packed_shape.iter().product::<usize>() {
+        return Err(anyhow!(
+            "AWQ tensor {} packed shape {:?} does not match data length {} or rows {}",
+            name,
+            packed_shape,
+            packed.len(),
+            rows
+        ));
+    }
+    if scale_shape[0] != rows || scale.len() != scale_shape.iter().product::<usize>() {
+        return Err(anyhow!(
+            "AWQ tensor {} scale shape {:?} does not match data length {} or rows {}",
+            name,
+            scale_shape,
+            scale.len(),
+            rows
+        ));
+    }
+    if packed_cols != cols.div_ceil(8) {
+        return Err(anyhow!(
+            "AWQ tensor {} packed columns {} do not match original columns {}",
+            name,
+            packed_cols,
+            cols
+        ));
+    }
+    if scale_cols == 0 || cols % scale_cols != 0 {
+        return Err(anyhow!(
+            "AWQ tensor {} cannot infer group size from cols {} and scale columns {}",
+            name,
+            cols,
+            scale_cols
+        ));
+    }
+
+    let group_size = cols / scale_cols;
+    let mut output = Vec::with_capacity(rows * cols);
+    for row in 0..rows {
+        let packed_row = &packed[row * packed_cols..(row + 1) * packed_cols];
+        let scale_row = &scale[row * scale_cols..(row + 1) * scale_cols];
+        for col in 0..cols {
+            let packed_word = packed_row[col / 8] as u32;
+            let unsigned = ((packed_word >> ((col % 8) * 4)) & 0x0f) as i32;
+            let quantized = unsigned - 8;
+            let value = quantized as f32 * scale_row[col / group_size].to_f32();
+            output.push(Bf16::from_f32(value));
+        }
+    }
+
+    Ok(output)
 }
 
 // use crate::init::config::Config;
@@ -169,7 +357,7 @@ impl SafeTensorsLoader {
     /// 创建多文件safetensors加载器
     pub fn new<P: AsRef<Path>>(model_dir: P) -> Result<Self> {
         let model_dir = model_dir.as_ref();
-        /* 
+        /*
         let config_file = model_dir.join("config.json");
 
         if !config_file.exists() {
@@ -186,7 +374,10 @@ impl SafeTensorsLoader {
             let file_name_str = file_name.to_string_lossy();
 
             if file_name_str.ends_with(".safetensors") {
-                println!("Found safetensors file: {}", entry.path().to_string_lossy().to_string());
+                println!(
+                    "Found safetensors file: {}",
+                    entry.path().to_string_lossy().to_string()
+                );
                 model_files.push(entry.path().to_string_lossy().to_string());
             }
         }
@@ -207,7 +398,7 @@ impl SafeTensorsLoader {
     /// 加载所有权重文件
     pub fn load_all_weights_f16(&self) -> Result<HashMap<String, Vec<f16>>> {
         let mut all_weights = HashMap::new();
-        
+
         for model_file in &self.model_files {
             let file = File::open(model_file)?;
             let mmap = unsafe { MmapOptions::new().map(&file)? };
@@ -274,6 +465,7 @@ impl SafeTensorsLoader {
     ) -> Result<HashMap<String, Vec<Bf16>>> {
         let mut all_weights = HashMap::new();
         let mut packed_experts: HashMap<String, PackedExpertTensor> = HashMap::new();
+        let mut awq_parts: HashMap<String, AwqTensorParts> = HashMap::new();
 
         for model_file in &self.model_files {
             let file = File::open(model_file)?;
@@ -282,41 +474,74 @@ impl SafeTensorsLoader {
 
             for (name, tensor_view) in safetensors.tensors() {
                 let raw_data = tensor_view.data();
-                let data: Vec<Bf16> = match tensor_view.dtype() {
-                    Dtype::BF16 => raw_data
-                        .chunks_exact(2)
-                        .map(|chunk| Bf16::from_bits(u16::from_le_bytes([chunk[0], chunk[1]])))
-                        .collect(),
-                    Dtype::F16 => raw_data
-                        .chunks_exact(2)
-                        .map(|chunk| f16_bits_to_f32(u16::from_le_bytes([chunk[0], chunk[1]])))
-                        .map(Bf16::from_f32)
-                        .collect(),
-                    Dtype::F32 => raw_data
-                        .chunks_exact(4)
-                        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                        .map(Bf16::from_f32)
-                        .collect(),
-                    _ => {
-                        return Err(anyhow!(
-                            "Unsupported tensor dtype: {:?}",
-                            tensor_view.dtype()
-                        ));
+                if let Some((weight_name, part)) = awq_part_name(&name) {
+                    let entry = awq_parts.entry(weight_name).or_default();
+                    match part {
+                        AwqPart::Packed => {
+                            if tensor_view.dtype() != Dtype::I32 {
+                                return Err(anyhow!(
+                                    "AWQ tensor {} expected I32 weight_packed, got {:?}",
+                                    name,
+                                    tensor_view.dtype()
+                                ));
+                            }
+                            entry.packed = Some(read_i32_data(raw_data, &name)?);
+                            entry.packed_shape = Some(tensor_view.shape().to_vec());
+                        }
+                        AwqPart::Scale => {
+                            entry.scale = Some(read_bf16_compatible_data(
+                                raw_data,
+                                tensor_view.dtype(),
+                                &name,
+                            )?);
+                            entry.scale_shape = Some(tensor_view.shape().to_vec());
+                        }
+                        AwqPart::Shape => {
+                            if tensor_view.dtype() != Dtype::I64 {
+                                return Err(anyhow!(
+                                    "AWQ tensor {} expected I64 weight_shape, got {:?}",
+                                    name,
+                                    tensor_view.dtype()
+                                ));
+                            }
+                            entry.original_shape = Some(read_i64_shape(raw_data, &name)?);
+                        }
                     }
+                    continue;
+                }
+
+                let Some(canonical_name) = canonical_weight_name(&name) else {
+                    continue;
                 };
+                let data = read_bf16_compatible_data(raw_data, tensor_view.dtype(), &name)?;
 
                 if num_experts > 0 {
-                    if let Some((packed_name, expert_idx)) = packed_expert_name(&name) {
+                    if let Some((packed_name, expert_idx)) = packed_expert_name(&canonical_name) {
                         let entry = packed_experts
                             .entry(packed_name.clone())
                             .or_insert_with(|| PackedExpertTensor::new(num_experts, data.len()));
-                        entry.insert(expert_idx, &data, &name)?;
+                        entry.insert(expert_idx, &data, &canonical_name)?;
                         continue;
                     }
                 }
 
-                all_weights.insert(name.to_string(), data);
+                all_weights.insert(canonical_name, data);
             }
+        }
+
+        for (name, parts) in awq_parts {
+            let data = dequantize_pack_quantized_int4(&name, parts)?;
+            if num_experts > 0 {
+                if let Some((packed_name, expert_idx)) = packed_expert_name(&name) {
+                    let entry = packed_experts
+                        .entry(packed_name.clone())
+                        .or_insert_with(|| PackedExpertTensor::new(num_experts, data.len()));
+                    entry.insert(expert_idx, &data, &name)?;
+                    continue;
+                }
+            }
+
+            all_weights.insert(name, data);
         }
 
         for (name, packed) in packed_experts {
@@ -431,6 +656,76 @@ mod tests {
     }
 
     #[test]
+    fn test_dequantize_pack_quantized_awq_expert_tensor() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.safetensors");
+
+        let quantized = [-8i32, -1, 0, 7, 3, -4, 5, 2];
+        let mut packed_word = 0u32;
+        for (idx, value) in quantized.iter().enumerate() {
+            packed_word |= ((*value + 8) as u32) << (idx * 4);
+        }
+        let packed_bytes = (packed_word as i32).to_le_bytes().to_vec();
+
+        let scales = [Bf16::from_f32(0.5), Bf16::from_f32(2.0)];
+        let scale_bytes = scales
+            .iter()
+            .flat_map(|value| value.to_bits().to_le_bytes())
+            .collect::<Vec<_>>();
+        let shape_bytes = [1i64, 8i64]
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+
+        let packed_view = TensorView::new(Dtype::I32, vec![1, 1], &packed_bytes).unwrap();
+        let scale_view = TensorView::new(Dtype::BF16, vec![1, 2], &scale_bytes).unwrap();
+        let shape_view = TensorView::new(Dtype::I64, vec![2], &shape_bytes).unwrap();
+        let tensors = vec![
+            (
+                "model.language_model.layers.0.mlp.experts.0.gate_proj.weight_packed",
+                packed_view,
+            ),
+            (
+                "model.language_model.layers.0.mlp.experts.0.gate_proj.weight_scale",
+                scale_view,
+            ),
+            (
+                "model.language_model.layers.0.mlp.experts.0.gate_proj.weight_shape",
+                shape_view,
+            ),
+        ];
+        serialize_to_file(tensors, &None, &path).unwrap();
+
+        let loader = SafeTensorsLoader::new(&dir).unwrap();
+        let weights = loader.load_all_weights_bf16_packed_moe(1).unwrap();
+        let packed_name = "model.layers.0.mlp.experts.gate_proj.weight";
+        let expected = [-4.0f32, -0.5, 0.0, 3.5, 6.0, -8.0, 10.0, 4.0]
+            .into_iter()
+            .map(Bf16::from_f32)
+            .collect::<Vec<_>>();
+
+        assert_eq!(weights[packed_name], expected);
+        assert!(!weights.contains_key("model.layers.0.mlp.experts.0.gate_proj.weight"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_canonical_language_model_weight_name() {
+        assert_eq!(
+            canonical_weight_name("model.language_model.embed_tokens.weight"),
+            Some("model.embed_tokens.weight".to_string())
+        );
+        assert_eq!(
+            canonical_weight_name("model.visual.patch_embed.weight"),
+            None
+        );
+        assert_eq!(canonical_weight_name("mtp.layers.0.weight"), None);
+    }
+
+    #[test]
+    #[ignore]
     fn test_load_safetensors() {
         // 这里可以添加测试代码
 
@@ -440,8 +735,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     /// 使用SafeTensorsModelLoader的详细示例
-    pub fn detailed_loading_example()  {
+    pub fn detailed_loading_example() {
         let model_dir = "D:/llama-3-chinese-8b-instruct-v3";
 
         // 方法2：使用详细的加载器

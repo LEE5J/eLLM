@@ -13,10 +13,11 @@ than building the experiment around an AVX-512 FP16 path.
 
 | Area | Status |
 | --- | --- |
-| Model format | Hugging Face `safetensors` shards |
-| Test model | Qwen3-Coder-30B-A3B-Instruct BF16 |
-| Runtime target | CPU, AVX-512 BF16 |
-| OpenAI-compatible API | Included as a local Python reference server |
+| Model format | Hugging Face `safetensors` shards and compressed-tensors AWQ |
+| BF16 test model | Qwen3-Coder-30B-A3B-Instruct BF16 |
+| AWQ test target | cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit compatibility inspection |
+| Rust runtime target | CPU, AVX-512 BF16 |
+| OpenAI-compatible API | Included as a local Python reference server for the BF16 test path |
 | Purpose | Proof of operation and baseline performance measurement |
 
 This repository is not intended as a production inference server yet. It is a
@@ -61,7 +62,11 @@ BF16 test path.
 ## Notes
 
 - The reported output quality was confirmed to be normal for short test prompts.
-- The current work focuses on BF16 safetensors loading and CPU execution.
+- The Rust path currently focuses on BF16 safetensors loading and CPU execution.
+- The Qwen3.6 AWQ target is not runnable in the eLLM CPU executor yet. Its
+  compressed-tensors expert weights can be unpacked, and the nested config is
+  parsed, but 30 of 40 text layers use GatedDeltaNet `linear_attention`, which
+  still needs a CPU operator implementation in eLLM.
 - The local model directory is intentionally ignored by Git because the full
   weight set is tens of GiB.
 - This is an experimental baseline; performance numbers depend heavily on memory
@@ -84,10 +89,11 @@ AMD Ryzen 시스템에서 실행해 보기 위한 실험용 저장소입니다.
 
 | 항목 | 상태 |
 | --- | --- |
-| 모델 형식 | Hugging Face `safetensors` 샤드 |
-| 테스트 모델 | Qwen3-Coder-30B-A3B-Instruct BF16 |
-| 실행 대상 | CPU, AVX-512 BF16 |
-| OpenAI 호환 API | 로컬 Python 레퍼런스 서버 포함 |
+| 모델 형식 | Hugging Face `safetensors` 샤드 및 compressed-tensors AWQ |
+| BF16 테스트 모델 | Qwen3-Coder-30B-A3B-Instruct BF16 |
+| AWQ 테스트 대상 | cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit 호환성 점검 |
+| Rust 실행 대상 | CPU, AVX-512 BF16 |
+| OpenAI 호환 API | BF16 테스트 경로용 로컬 Python 레퍼런스 서버 포함 |
 | 목적 | 동작 검증 및 기본 성능 측정 |
 
 이 저장소는 아직 프로덕션용 추론 서버를 목표로 한 것은 아닙니다. 테스트한
@@ -131,7 +137,11 @@ models/Qwen3-Coder-30B-A3B-Instruct-full/
 ## 참고
 
 - 짧은 테스트 프롬프트 기준으로 답변 품질은 정상적으로 나오는 것을 확인했습니다.
-- 현재 작업은 BF16 safetensors 로딩과 CPU 실행 경로 확인에 초점을 둡니다.
+- Rust 경로는 현재 BF16 safetensors 로딩과 CPU 실행 경로 확인에 초점을 둡니다.
+- Qwen3.6 AWQ 대상은 아직 eLLM CPU 실행기에서 실제 생성까지 실행할 수
+  없습니다. compressed-tensors expert weight unpack과 중첩 config 파싱은
+  추가했지만, text layer 40개 중 30개가 GatedDeltaNet `linear_attention`을
+  사용하므로 eLLM 쪽 CPU operator 구현이 더 필요합니다.
 - 전체 모델 가중치는 수십 GiB 규모이므로 Git에서 제외했습니다.
 - 성능 수치는 메모리 속도, CPU 클럭, 프롬프트 길이, 컨텍스트 길이에 크게 영향을
   받습니다.
